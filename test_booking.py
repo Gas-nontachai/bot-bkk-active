@@ -1,10 +1,12 @@
 import unittest
 import struct
+from unittest.mock import patch
 import xml.etree.ElementTree as ET
 from datetime import date
 
 from open_booking import (PACKAGE, activity_button, available_slot, confirmation_matches,
-                         is_review_page, orange_submit_center, ranked_courts, selected_date_matches)
+                         CenterNotFound, is_review_page, orange_submit_center, ranked_courts,
+                         retry_missing_center, selected_date_matches)
 
 
 def node(**attributes):
@@ -24,6 +26,36 @@ def schedule(*entries):
 
 
 class BookingSelectionTests(unittest.TestCase):
+    @patch("open_booking.time.sleep")
+    def test_missing_center_retries_three_times_after_first_attempt(self, sleep):
+        calls = []
+        def action():
+            calls.append(1)
+            raise CenterNotFound("ไม่มีศูนย์")
+        retry_missing_center(action)
+        self.assertEqual(len(calls), 4)
+        self.assertEqual(sleep.call_count, 3)
+
+    @patch("open_booking.time.sleep")
+    def test_retry_stops_when_flow_finishes(self, sleep):
+        calls = []
+        def action():
+            calls.append(1)
+            if len(calls) < 3:
+                raise CenterNotFound("ไม่มีศูนย์")
+            return "finished"
+        self.assertEqual(retry_missing_center(action), "finished")
+        self.assertEqual(len(calls), 3)
+
+    def test_submit_or_other_errors_do_not_restart_flow(self):
+        calls = []
+        def action():
+            calls.append(1)
+            raise RuntimeError("ผล Submit ไม่ชัดเจน")
+        with self.assertRaises(RuntimeError):
+            retry_missing_center(action)
+        self.assertEqual(len(calls), 1)
+
     def test_review_screen_recognized_in_both_languages(self):
         for title in ("Booking Review", "ประเมินการจอง", "รีวิวการจอง"):
             root = node()

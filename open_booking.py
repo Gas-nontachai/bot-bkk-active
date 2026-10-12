@@ -24,6 +24,24 @@ THAI_MONTHS = ("มกราคม", "กุมภาพันธ์", "มี�
 TIME_RANGE = re.compile(r"(?<!\d)(\d{1,2}):(\d{2})\s*[-–—]\s*(\d{1,2}):(\d{2})(?!\d)")
 
 
+class CenterNotFound(RuntimeError):
+    pass
+
+
+def retry_missing_center(action, retries=3):
+    for attempt in range(retries + 1):
+        LOGGER.info("รอบค้นหาศูนย์ %d/%d (retry %d/%d)", attempt + 1, retries + 1, attempt, retries)
+        try:
+            return action()
+        except CenterNotFound as error:
+            if attempt == retries:
+                LOGGER.info("%s: ลองซ้ำครบ %d ครั้งแล้ว จบการทำงาน", error, retries)
+                return
+            LOGGER.info("%s: ปิดแอปแล้ว รอ 2 วินาที ก่อนเริ่ม flow ใหม่ (retry %d/%d)",
+                        error, attempt + 1, retries)
+            time.sleep(2)
+
+
 class BangkokFormatter(logging.Formatter):
     def formatTime(self, record, datefmt=None):
         return datetime.fromtimestamp(record.created, ZoneInfo("Asia/Bangkok")).strftime(
@@ -190,6 +208,10 @@ def main():
                         default=datetime.now(ZoneInfo("Asia/Bangkok")).date(),
                         help="วันที่จอง YYYY-MM-DD (ค่าเริ่มต้นคือวันที่รันตามเวลาไทย)")
     args = parser.parse_args()
+    return retry_missing_center(lambda: run_flow(args), retries=3)
+
+
+def run_flow(args):
     adb = os.environ.get("ADB") or shutil.which("adb")
     if not adb:
         adb = str(Path.home() / "Library/Android/sdk/platform-tools/adb")
@@ -560,8 +582,9 @@ def main():
         loading = any(item.get("class") == "android.widget.ProgressBar"
                       for item in root.iter("node"))
         if empty and not loading and time.monotonic() - stable_since >= 3:
-            LOGGER.info("ไม่มี %s: ค้นหาแล้วไม่พบข้อมูล จบสคริปต์", args.center)
-            return
+            LOGGER.info("ไม่มี %s: ค้นหาแล้วไม่พบข้อมูล ปิดแอป", args.center)
+            run("shell", "am", "force-stop", PACKAGE)
+            raise CenterNotFound(f"ไม่มี {args.center}")
         time.sleep(1)
     else:
         raise RuntimeError("ผลค้นหายังไม่ชัดเจน: ไม่พบศูนย์ที่ตรงชื่อหรือข้อความไม่พบข้อมูล")

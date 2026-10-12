@@ -12,14 +12,14 @@ def open_booking(device, config):
     while time.monotonic() < deadline:
         root = device.read_ui()
         if device.dismiss_dialog(root):
-            time.sleep(1)
+            device.pause()
             continue
         node = booking_tab(root)
         if node is not None:
             LOGGER.info("กดเข้า จองคิว")
             device.tap(node)
             break
-        time.sleep(1)
+        device.pause()
     else:
         raise RuntimeError("ไม่พบแท็บจองคิวภายในเวลาที่กำหนด ตรวจหน้าจอแอป")
 
@@ -27,7 +27,7 @@ def open_booking(device, config):
     while time.monotonic() < deadline:
         root = device.read_ui()
         if device.dismiss_dialog(root):
-            time.sleep(1)
+            device.pause()
             continue
         node = next((item for item in root.iter("node")
                      if item.get("package") == PACKAGE
@@ -38,7 +38,7 @@ def open_booking(device, config):
             LOGGER.info("กด สร้างการจองใหม่")
             device.tap(node)
             break
-        time.sleep(1)
+        device.pause()
     else:
         raise RuntimeError("ไม่พบปุ่มสร้างการจองใหม่ ตรวจหน้าจอแอป")
 
@@ -46,14 +46,14 @@ def open_booking(device, config):
     while time.monotonic() < deadline:
         root = device.read_ui()
         if device.dismiss_dialog(root):
-            time.sleep(1)
+            device.pause()
             continue
         if any(item.get("package") == PACKAGE
                and item.get("text") == "เลือกศูนย์กีฬา"
                for item in root.iter("node")):
             LOGGER.info("เข้าหน้าเลือกศูนย์กีฬาแล้ว")
             break
-        time.sleep(1)
+        device.pause()
     else:
         raise RuntimeError("กดสร้างการจองใหม่แล้ว แต่ยังไม่พบหน้าเลือกศูนย์กีฬา")
     return root

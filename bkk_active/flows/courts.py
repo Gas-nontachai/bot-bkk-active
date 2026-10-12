@@ -12,7 +12,7 @@ def locate_court(device, config, number, from_top=False):
     if from_top:
         previous, unchanged = None, 0
         for _ in range(31):
-            root = device.read_ui()
+            root = device.read_ui(cached=True)
             node = activity_button(root, f"สนามแบดมินตัน {number}")
             if node is not None:
                 return node
@@ -25,7 +25,7 @@ def locate_court(device, config, number, from_top=False):
             raise RuntimeError("เลื่อนกลับต้นรายการสนามไม่สำเร็จ")
     previous, unchanged = None, 0
     for attempt in range(31):
-        root = device.read_ui()
+        root = device.read_ui(cached=(attempt == 0))
         node = activity_button(root, f"สนามแบดมินตัน {number}")
         if node is not None:
             return node

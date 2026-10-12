@@ -44,9 +44,9 @@ def open_court(device, config, number, court):
     device.tap(court)
     root = device.wait_for(lambda ui: "เลือกจองวัน-เวลา" in ui_labels(ui),
                     f"กด {name} แล้ว แต่ยังไม่พบหน้าเลือกจองวัน-เวลา")
-    choose_date(device, config, root)
+    root = choose_date(device, config, root)
     return device.wait_for(lambda ui: not any(item.get("class") == "android.widget.ProgressBar"
                                        for item in ui.iter("node"))
                     and (any(TIME_RANGE.search(label) for label in ui_labels(ui))
                          or "ไม่พบข้อมูล" in ui_labels(ui)),
-                    f"รายการเวลาของ {name} ยังโหลดไม่เสร็จ")
+                    f"รายการเวลาของ {name} ยังโหลดไม่เสร็จ", initial=root)

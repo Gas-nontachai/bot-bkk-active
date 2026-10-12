@@ -47,7 +47,7 @@ def search_center(device, config, root):
     while time.monotonic() < deadline:
         root = device.read_ui()
         if device.dismiss_dialog(root):
-            time.sleep(1)
+            device.pause()
             continue
         node = next((item for item in root.iter("node")
                      if item.get("package") == PACKAGE
@@ -78,7 +78,7 @@ def search_center(device, config, root):
             LOGGER.info("ไม่มี %s: ค้นหาแล้วไม่พบข้อมูล ปิดแอป", config.center)
             device.run("shell", "am", "force-stop", PACKAGE)
             raise CenterNotFound(f"ไม่มี {config.center}")
-        time.sleep(1)
+        device.pause()
     else:
         raise RuntimeError("ผลค้นหายังไม่ชัดเจน: ไม่พบศูนย์ที่ตรงชื่อหรือข้อความไม่พบข้อมูล")
 
@@ -86,7 +86,7 @@ def search_center(device, config, root):
     while time.monotonic() < deadline:
         root = device.read_ui()
         if device.dismiss_dialog(root):
-            time.sleep(1)
+            device.pause()
             continue
         labels = [item.get("text", "") for item in root.iter("node")
                   if item.get("package") == PACKAGE]
@@ -96,7 +96,7 @@ def search_center(device, config, root):
         if "เลือกกิจกรรม" in labels:
             LOGGER.info("เข้าหน้าเลือกกิจกรรมแล้ว")
             break
-        time.sleep(1)
+        device.pause()
     else:
         raise RuntimeError(f"กด {config.center} แล้ว แต่ยังไม่พบหน้าเลือกกิจกรรม")
     return True

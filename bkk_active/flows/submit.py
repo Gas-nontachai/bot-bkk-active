@@ -1,6 +1,5 @@
 """Validate the booking summary and submit once."""
 from ..middleware import flow_step
-import subprocess
 from ..ui import confirmation_matches, is_review_page, ui_labels
 from ..vision import orange_submit_center
 from .review import submit_review
@@ -19,11 +18,8 @@ def select_slot(device, config, number, slot):
                     "ไม่พบหน้ายืนยันที่วัน สนาม และเวลาตรงกับตัวเลือก จึงไม่ได้กด Submit")
     LOGGER.info("ตรวจข้อมูลยืนยันตรงกัน: วันที่=%s สนาม=%d เวลา=%s",
                 config.date.isoformat(), number, interval)
-    image = subprocess.run([device.adb, "-s", config.serial, "exec-out", "screencap"],
-                           capture_output=True, timeout=15)
-    if image.returncode:
-        raise RuntimeError("อ่านภาพหน้าจอเพื่อหาปุ่มสีส้มไม่ได้")
-    x, y = orange_submit_center(image.stdout)
+    raw = device.screenshot_raw()
+    x, y = orange_submit_center(raw)
     LOGGER.info("กดปุ่ม Submit สีส้มที่ (%d, %d)", x, y)
     device.run("shell", "input", "tap", str(x), str(y))
     booking_logged = False
@@ -46,7 +42,7 @@ def select_slot(device, config, number, slot):
             booking_logged = True
         if device.dismiss_dialog(root):
             LOGGER.info("ปิด dialog หลัง Submit รอตรวจผลการจอง")
-        time.sleep(1)
+        device.pause()
     if booking_logged:
         raise RuntimeError("จองสำเร็จแล้ว แต่ไม่พบหน้า Booking Review จึงยังส่งรีวิวไม่ได้")
     raise RuntimeError("กด Submit แล้ว แต่ยังยืนยันผลไม่ได้ เก็บภาพไว้และไม่กด Submit ซ้ำ")

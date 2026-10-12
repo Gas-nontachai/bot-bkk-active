@@ -16,6 +16,8 @@ class AndroidDevice:
     def __init__(self, serial):
         self.serial = serial
         self.middleware = CaptureLoggingMiddleware(get_run_artifacts())
+        self.cached_root = None
+        self.cache_valid = False
         self.adb = os.environ.get('ADB') or shutil.which('adb')
         if not self.adb:
             self.adb = str(Path.home() / 'Library/Android/sdk/platform-tools/adb')
@@ -24,20 +26,57 @@ class AndroidDevice:
 
     def run(self, *command):
         self.middleware.before_command(self, command)
-        result = subprocess.run(
-            [self.adb, "-s", self.serial, *command], capture_output=True,
-            text=True, timeout=15,
-        )
+        if command[:2] in (("shell", "input"), ("shell", "am")) or command[0] == "install":
+            self.cache_valid = False
+        started = time.perf_counter()
+        try:
+            result = subprocess.run(
+                [self.adb, "-s", self.serial, *command], capture_output=True,
+                text=True, timeout=15,
+            )
+        finally:
+            self.record_metric("adb_command", time.perf_counter() - started)
+            if command[:3] == ("shell", "input", "tap"):
+                self.record_metric("tap", time.perf_counter() - started)
+            elif command[:3] == ("shell", "input", "swipe"):
+                self.record_metric("swipe", time.perf_counter() - started)
         if result.returncode:
             raise RuntimeError(result.stderr.strip() or result.stdout.strip()
                                or f"ADB {command} จบด้วย exit code {result.returncode}")
         return result.stdout
 
-    def read_ui(self):
-        self.run("shell", "uiautomator", "dump", "/sdcard/bkk-active-ui.xml")
-        root = ET.fromstring(self.run("shell", "cat", "/sdcard/bkk-active-ui.xml"))
+    def record_metric(self, category, elapsed):
+        artifacts = self.middleware.artifacts
+        if artifacts is not None:
+            artifacts.metrics.record(category, elapsed)
+
+    def pause(self, seconds=1):
+        time.sleep(seconds if self.middleware.debug_capture else min(seconds, 0.15))
+
+    def read_ui(self, *, cached=False):
+        if cached and self.cache_valid:
+            self.record_metric("ui_cache_hit", 0)
+            return self.cached_root
+        started = time.perf_counter()
+        try:
+            xml = self.run("shell", "uiautomator dump /sdcard/bkk-active-ui.xml >/dev/null && cat /sdcard/bkk-active-ui.xml")
+            root = ET.fromstring(xml)
+        finally:
+            self.record_metric("ui_read", time.perf_counter() - started)
+        self.cached_root, self.cache_valid = root, True
         self.middleware.observe_ui(self, root)
         return root
+
+    def screenshot_raw(self):
+        started = time.perf_counter()
+        try:
+            image = subprocess.run([self.adb, "-s", self.serial, "exec-out", "screencap"],
+                                   capture_output=True, timeout=15)
+            if image.returncode:
+                raise RuntimeError("อ่านภาพหน้าจอไม่ได้")
+            return image.stdout
+        finally:
+            self.record_metric("raw_capture", time.perf_counter() - started)
 
     def tap(self, node):
         coords = bounds(node)
@@ -58,16 +97,17 @@ class AndroidDevice:
                 return True
         return False
 
-    def wait_for(self, predicate, message):
+    def wait_for(self, predicate, message, initial=None):
         deadline = time.monotonic() + 20
         while time.monotonic() < deadline:
-            root = self.read_ui()
+            root = initial if initial is not None else self.read_ui()
+            initial = None
             if self.dismiss_dialog(root):
-                time.sleep(1)
+                self.pause()
                 continue
             if predicate(root):
                 return root
-            time.sleep(1)
+            self.pause()
         raise RuntimeError(message)
 
     def scroll_down(self, root, upward=False):
@@ -86,8 +126,9 @@ class AndroidDevice:
         begin, end = y2 - height // 10, y1 + height // 5
         if upward:
             begin, end = end, begin
-        self.run("shell", "input", "swipe", str(x), str(begin), str(x), str(end), "450")
-        time.sleep(0.5)
+        duration = "450" if self.middleware.debug_capture else "250"
+        self.run("shell", "input", "swipe", str(x), str(begin), str(x), str(end), duration)
+        self.pause(0.5)
         return True
 
     def signature(self, root):

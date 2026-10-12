@@ -1,6 +1,5 @@
 """Submit the existing review form and finish."""
 from ..middleware import flow_step
-import subprocess
 from ..ui import is_review_page, ui_labels
 from ..vision import orange_submit_center
 import time
@@ -9,11 +8,8 @@ from ..logging_setup import LOGGER, status
 
 @flow_step("review")
 def submit_review(device, config, root):
-    image = subprocess.run([device.adb, "-s", config.serial, "exec-out", "screencap"],
-                           capture_output=True, timeout=15)
-    if image.returncode:
-        raise RuntimeError("อ่านภาพหน้าจอรีวิวไม่ได้")
-    x, y = orange_submit_center(image.stdout)
+    raw = device.screenshot_raw()
+    x, y = orange_submit_center(raw)
     LOGGER.info("กดปุ่ม Review สีส้มที่ (%d, %d)", x, y)
     device.run("shell", "input", "tap", str(x), str(y))
     deadline = time.monotonic() + 20
@@ -30,5 +26,5 @@ def submit_review(device, config, root):
             return
         if device.dismiss_dialog(root):
             LOGGER.info("ปิด dialog หลัง Review รอตรวจผล")
-        time.sleep(1)
+        device.pause()
     raise RuntimeError("กด Review แล้ว แต่ยังไม่ออกจากหน้ารีวิว เก็บภาพไว้และไม่กดซ้ำ")

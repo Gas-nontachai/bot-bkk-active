@@ -17,6 +17,11 @@ class CaptureLoggingMiddleware:
         self.last_error = None
         self.reading_snapshot = False
 
+    @property
+    def debug_capture(self):
+        # Unconfigured test/fake artifact providers retain the full-capture behavior.
+        return getattr(self.artifacts, "capture_mode", "debug") != "fast"
+
     def _capture(self, device, label, root=None, force=False):
         if self.artifacts is None:
             return
@@ -34,7 +39,13 @@ class CaptureLoggingMiddleware:
     def observe_ui(self, device, root):
         self.last_root = root
         if not self.reading_snapshot:
-            self._capture(device, self.current_step, root)
+            if self.artifacts is not None and not self.debug_capture:
+                try:
+                    self.artifacts.record_ui(root, self.current_step)
+                except OSError as error:
+                    LOGGER.warning("เก็บ XML ขั้นตอน %s ไม่สำเร็จ: %s", self.current_step, error)
+            else:
+                self._capture(device, self.current_step, root)
 
     def before_command(self, device, command):
         # Observe navigation commands, not repeated XML reads or queries.
@@ -47,7 +58,10 @@ class CaptureLoggingMiddleware:
         else:
             return
         LOGGER.info("ทำงาน [%s]: %s", self.current_step, " ".join(command))
-        self._capture(device, f"{self.current_step}-before-{action}", self.last_root, force=True)
+        critical = action == "close-app" or (action == "input-tap" and
+                    any(step in self.current_step for step in ("submit-booking", "review")))
+        if self.debug_capture or critical:
+            self._capture(device, f"{self.current_step}-before-{action}", self.last_root, force=True)
 
     @contextmanager
     def step(self, device, name):
@@ -64,23 +78,33 @@ class CaptureLoggingMiddleware:
                             "court-list": "ตรวจสอบสนามและเวลาว่าง", "submit-booking": "ยืนยันการจอง",
                             "review": "ส่งรีวิว"}
             status("กำลัง%s", descriptions.get(name, name))
-        self._capture(device, f"{label}-before", force=True)
+        if self.debug_capture:
+            self._capture(device, f"{label}-before", force=True)
+        outcome = "completed"
         try:
             yield
         except CenterNotFound:
+            outcome = "center_not_found"
             # The close-app command already captures search results before closing.
             LOGGER.info("ขั้นตอน %s: ไม่พบศูนย์ ใช้เวลา %.2f วินาที", label, time.monotonic() - started)
             raise
         except Exception as error:
+            outcome = "error"
             if error is not self.last_error:
                 self.last_error = error
                 LOGGER.exception("ขั้นตอน %s ล้มเหลว หลัง %.2f วินาที", label, time.monotonic() - started)
                 self._capture(device, f"{label}-error", force=True)
             raise
         else:
-            self._capture(device, f"{label}-after", force=True)
+            if self.debug_capture or name in ("center-search", "submit-booking", "review"):
+                root = self.last_root if (not self.debug_capture and
+                        getattr(device, "cache_valid", False)) else None
+                self._capture(device, f"{label}-after", root, force=True)
             LOGGER.info("จบขั้นตอน %s ใช้เวลา %.2f วินาที", label, time.monotonic() - started)
         finally:
+            if self.artifacts is not None:
+                self.artifacts.metrics.record_step(label, time.monotonic() - started,
+                                                   outcome, self.artifacts.attempt)
             self.current_step = previous
             if self.artifacts is not None:
                 self.artifacts.step = previous

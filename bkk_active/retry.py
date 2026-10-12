@@ -16,7 +16,7 @@ def retry_missing_center(action, retries=3):
         except CenterNotFound as error:
             if attempt == retries:
                 status("%s: ลองซ้ำครบ %d ครั้งแล้ว จบการทำงาน", error, retries)
-                return
+                return "center_not_found"
             LOGGER.info("%s: ปิดแอปแล้ว รอ 2 วินาที ก่อนเริ่ม flow ใหม่ (retry %d/%d)",
                         error, attempt + 1, retries)
             status("ไม่พบศูนย์ กำลังลองใหม่ %d/%d", attempt + 1, retries)

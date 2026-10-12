@@ -13,10 +13,12 @@ def run_flow(config):
     launch(device, config)
     root = open_booking(device, config)
     if not search_center(device, config, root):
-        return
+        return "membership_required"
     if not select_activity(device, config):
-        return
+        return "activity_not_found"
     choice = choose_court_slot(device, config)
     if choice is not None:
         number, slot = choice
         select_slot(device, config, number, slot)
+        return "completed"
+    return "no_available_slot"

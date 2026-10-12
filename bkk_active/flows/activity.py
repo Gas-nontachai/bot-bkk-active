@@ -12,14 +12,14 @@ def select_activity(device, config):
     while time.monotonic() < deadline:
         root = device.read_ui()
         if device.dismiss_dialog(root):
-            time.sleep(1)
+            device.pause()
             continue
         node = activity_button(root)
         if node is not None:
             LOGGER.info("พบกิจกรรม: กด สนามแบดมินตัน")
             device.tap(node)
             break
-        time.sleep(1)
+        device.pause()
     else:
         status("ไม่มี สนามแบดมินตัน บนหน้ากิจกรรม จบสคริปต์")
         return

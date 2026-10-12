@@ -1,10 +1,12 @@
 """Open booking tab and create a new booking."""
+from ..middleware import flow_step
 from ..ui import booking_tab
 import time
 from ..config import PACKAGE
 from ..logging_setup import LOGGER
 
 
+@flow_step("booking")
 def open_booking(device, config):
     deadline = time.monotonic() + 25
     while time.monotonic() < deadline:

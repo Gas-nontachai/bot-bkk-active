@@ -1,9 +1,11 @@
 """Validate device and launch BKK Active."""
+from ..middleware import flow_step
 from ..config import ACTIVITY
 from ..config import PACKAGE
 from ..logging_setup import LOGGER
 
 
+@flow_step("launch")
 def launch(device, config):
     LOGGER.info("เริ่มสคริปต์: อุปกรณ์=%s, ศูนย์=%s, วันที่=%s, เวลา=18:00–21:00",
                 config.serial, config.center, config.date.isoformat())

@@ -13,5 +13,5 @@ if __name__ == "__main__":
     try:
         main()
     except (RuntimeError, subprocess.TimeoutExpired, ET.ParseError) as error:
-        LOGGER.error("ผิดพลาด: %s", error)
+        LOGGER.exception("ผิดพลาด: %s", error)
         sys.exit(1)

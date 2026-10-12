@@ -1,4 +1,5 @@
 """Compare courts and return the earliest suitable one-hour slot."""
+from ..middleware import flow_step
 import re
 from ..ui import activity_button, ui_labels
 from ..policy import ranked_courts
@@ -6,6 +7,7 @@ from .schedule import open_court, find_evening_slot
 from ..logging_setup import LOGGER
 
 
+@flow_step("locate-court")
 def locate_court(device, config, number, from_top=False):
     if from_top:
         previous, unchanged = None, 0
@@ -36,6 +38,7 @@ def locate_court(device, config, number, from_top=False):
     raise RuntimeError("เลื่อนหารายชื่อสนามครบ 30 ครั้ง แต่ยังไม่ถึงท้ายรายการ")
 
 
+@flow_step("back-to-courts")
 def back_to_courts(device, config):
     LOGGER.info("กลับไปหน้าเลือกสนาม")
     device.run("shell", "input", "keyevent", "KEYCODE_BACK")
@@ -44,6 +47,7 @@ def back_to_courts(device, config):
              and "เลือกจองวัน-เวลา" not in ui_labels(ui), "กลับไปหน้าเลือกสนามไม่ได้")
 
 
+@flow_step("court-list")
 def choose_court_slot(device, config):
     device.wait_for(lambda ui: any(re.fullmatch(r"สนามแบดมินตัน [1-7]", label)
                            for label in ui_labels(ui)), "ยังไม่พบหน้าเลือกสนามแบดมินตัน")

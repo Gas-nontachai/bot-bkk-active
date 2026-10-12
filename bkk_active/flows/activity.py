@@ -1,9 +1,11 @@
 """Select the badminton activity."""
+from ..middleware import flow_step
 from ..ui import activity_button
 import time
 from ..logging_setup import LOGGER
 
 
+@flow_step("activity")
 def select_activity(device, config):
     LOGGER.info("ค้นหากิจกรรม สนามแบดมินตัน")
     deadline = time.monotonic() + 15

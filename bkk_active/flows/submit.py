@@ -1,4 +1,5 @@
 """Validate the booking summary and submit once."""
+from ..middleware import flow_step
 import subprocess
 from ..ui import confirmation_matches, is_review_page, ui_labels
 from ..vision import orange_submit_center
@@ -7,6 +8,7 @@ import time
 from ..logging_setup import LOGGER
 
 
+@flow_step("submit-booking")
 def select_slot(device, config, number, slot):
     node, interval = slot
     LOGGER.info("เลือกสิทธิ์ 1 ชั่วโมง: สนามแบดมินตัน %d วันที่ %s เวลา %s",
@@ -15,7 +17,6 @@ def select_slot(device, config, number, slot):
     LOGGER.info("รอหน้ายืนยันการจอง")
     root = device.wait_for(lambda ui: confirmation_matches(ui, config.date, number, interval),
                     "ไม่พบหน้ายืนยันที่วัน สนาม และเวลาตรงกับตัวเลือก จึงไม่ได้กด Submit")
-    device.capture(root, "before-submit")
     LOGGER.info("ตรวจข้อมูลยืนยันตรงกัน: วันที่=%s สนาม=%d เวลา=%s",
                 config.date.isoformat(), number, interval)
     image = subprocess.run([device.adb, "-s", config.serial, "exec-out", "screencap"],
@@ -35,20 +36,17 @@ def select_slot(device, config, number, slot):
                    or ("การจองของคุณ" in ui_labels(root)
                        and confirmation_matches(root, config.date, number, interval)))
         if failed:
-            device.capture(root, "submit-error")
             raise RuntimeError(f"แอปแจ้งข้อผิดพลาดหลัง Submit: {text}")
         if is_review_page(root):
             LOGGER.info("ถึงหน้า Booking Review หลัง Submit การจอง")
             submit_review(device, config, root)
             return
         if success and not booking_logged:
-            device.capture(root, "submit-success")
             LOGGER.info("จองสำเร็จ: สนาม %d วันที่ %s เวลา %s", number, config.date.isoformat(), interval)
             booking_logged = True
         if device.dismiss_dialog(root):
             LOGGER.info("ปิด dialog หลัง Submit รอตรวจผลการจอง")
         time.sleep(1)
-    device.capture(root, "submit-result-unknown")
     if booking_logged:
         raise RuntimeError("จองสำเร็จแล้ว แต่ไม่พบหน้า Booking Review จึงยังส่งรีวิวไม่ได้")
     raise RuntimeError("กด Submit แล้ว แต่ยังยืนยันผลไม่ได้ เก็บภาพไว้และไม่กด Submit ซ้ำ")

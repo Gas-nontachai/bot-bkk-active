@@ -14,8 +14,17 @@ class BangkokFormatter(logging.Formatter):
         )
 
 
-def configure_logging():
+def configure_logging(log_file=None):
+    for existing in LOGGER.handlers[:]:
+        LOGGER.removeHandler(existing)
+        existing.close()
+    formatter = BangkokFormatter("%(asctime)s [%(levelname)s] %(message)s")
     handler = logging.StreamHandler(sys.stdout)
-    handler.setFormatter(BangkokFormatter("%(asctime)s [%(levelname)s] %(message)s"))
+    handler.setFormatter(formatter)
     LOGGER.addHandler(handler)
+    if log_file is not None:
+        file_handler = logging.FileHandler(log_file, encoding="utf-8")
+        file_handler.setFormatter(formatter)
+        LOGGER.addHandler(file_handler)
     LOGGER.setLevel(logging.INFO)
+    LOGGER.propagate = False

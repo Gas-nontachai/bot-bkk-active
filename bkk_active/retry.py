@@ -2,10 +2,14 @@
 import time
 from .errors import CenterNotFound
 from .logging_setup import LOGGER
+from .run_artifacts import get_run_artifacts
 
 
 def retry_missing_center(action, retries=3):
     for attempt in range(retries + 1):
+        artifacts = get_run_artifacts()
+        if artifacts is not None:
+            artifacts.attempt = attempt + 1
         LOGGER.info("รอบค้นหาศูนย์ %d/%d (retry %d/%d)", attempt + 1, retries + 1, attempt, retries)
         try:
             return action()

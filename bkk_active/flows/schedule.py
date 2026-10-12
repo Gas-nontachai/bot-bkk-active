@@ -1,10 +1,12 @@
 """Select the date and inspect available evening slots."""
+from ..middleware import flow_step
 from ..config import TIME_RANGE
 from ..ui import activity_button, selected_date_matches, ui_labels
 from ..policy import available_slot
 from ..logging_setup import LOGGER
 
 
+@flow_step("choose-date")
 def choose_date(device, config, root):
     LOGGER.info("เลือกวันที่ %s ตามเวลาไทย", config.date.isoformat())
     if not selected_date_matches(root, config.date):
@@ -18,6 +20,7 @@ def choose_date(device, config, root):
     return root
 
 
+@flow_step("find-evening-time")
 def find_evening_slot(device, config, root, exact_interval=None):
     previous, unchanged = None, 0
     for attempt in range(41):
@@ -34,6 +37,7 @@ def find_evening_slot(device, config, root, exact_interval=None):
     raise RuntimeError("เลื่อนหน้าเวลาครบ 40 ครั้ง แต่ยังไม่ถึงท้ายรายการ")
 
 
+@flow_step("court-schedule")
 def open_court(device, config, number, court):
     name = f"สนามแบดมินตัน {number}"
     LOGGER.info("กด %s เพื่อดูเวลาว่าง", name)

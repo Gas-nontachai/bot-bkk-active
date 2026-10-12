@@ -1,4 +1,5 @@
 """Search for a center and enter its activity list."""
+from ..middleware import flow_step
 import base64
 import subprocess
 from ..config import PROJECT_ROOT
@@ -9,6 +10,7 @@ from ..config import PACKAGE
 from ..logging_setup import LOGGER
 
 
+@flow_step("center-search")
 def search_center(device, config, root):
     LOGGER.info("ค้นหาช่องค้นหาศูนย์บริการ")
     field = next((item for item in root.iter("node")

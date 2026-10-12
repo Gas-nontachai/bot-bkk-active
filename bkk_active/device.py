@@ -1,26 +1,29 @@
 """ADB commands, UI polling, navigation, and artifact capture."""
-from datetime import datetime
 import os
 from pathlib import Path
 import shutil
 import subprocess
 import time
 import xml.etree.ElementTree as ET
-from zoneinfo import ZoneInfo
-from .config import PACKAGE, PROJECT_ROOT
+from .config import PACKAGE
 from .logging_setup import LOGGER
 from .ui import bounds
+from .run_artifacts import get_run_artifacts
+from .middleware import CaptureLoggingMiddleware
 
 
 class AndroidDevice:
     def __init__(self, serial):
         self.serial = serial
+        self.middleware = CaptureLoggingMiddleware(get_run_artifacts())
         self.adb = os.environ.get('ADB') or shutil.which('adb')
         if not self.adb:
             self.adb = str(Path.home() / 'Library/Android/sdk/platform-tools/adb')
         if not Path(self.adb).is_file():
             raise RuntimeError('ไม่พบ adb: ตั้งค่า ADB เป็น path ของ platform-tools/adb')
+
     def run(self, *command):
+        self.middleware.before_command(self, command)
         result = subprocess.run(
             [self.adb, "-s", self.serial, *command], capture_output=True,
             text=True, timeout=15,
@@ -32,26 +35,16 @@ class AndroidDevice:
 
     def read_ui(self):
         self.run("shell", "uiautomator", "dump", "/sdcard/bkk-active-ui.xml")
-        return ET.fromstring(self.run("shell", "cat", "/sdcard/bkk-active-ui.xml"))
-
-    def capture(self, root, label):
-        folder = PROJECT_ROOT / "artifacts" / datetime.now(
-            ZoneInfo("Asia/Bangkok")).strftime("%Y%m%d-%H%M%S-%f")
-        folder.mkdir(parents=True, exist_ok=True)
-        ET.ElementTree(root).write(folder / f"{label}.xml", encoding="utf-8", xml_declaration=True)
-        image = subprocess.run([self.adb, "-s", self.serial, "exec-out", "screencap", "-p"],
-                               capture_output=True, timeout=15)
-        if image.returncode:
-            raise RuntimeError("บันทึกภาพหน้าจอไม่สำเร็จ")
-        (folder / f"{label}.png").write_bytes(image.stdout)
-        LOGGER.info("บันทึกภาพและ UI: %s", folder)
-        return folder
+        root = ET.fromstring(self.run("shell", "cat", "/sdcard/bkk-active-ui.xml"))
+        self.middleware.observe_ui(self, root)
+        return root
 
     def tap(self, node):
         coords = bounds(node)
         if not coords:
             raise RuntimeError("อ่านตำแหน่งปุ่มไม่ได้")
         x1, y1, x2, y2 = coords
+        LOGGER.info("กดหน้าจอที่ (%d, %d)", (x1 + x2) // 2, (y1 + y2) // 2)
         self.run("shell", "input", "tap", str((x1 + x2) // 2), str((y1 + y2) // 2))
 
     def dismiss_dialog(self, root):

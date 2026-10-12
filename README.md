@@ -10,6 +10,8 @@ bkk_active/
   config.py                 # package, activity, path และค่าคงที่
   device.py                 # ADB, tap, scroll, wait, screenshot
   logging_setup.py          # INFO/ERROR พร้อมเวลาไทย
+  run_artifacts.py          # โฟลเดอร์รอบรัน ภาพ/UI และ timeline
+  middleware.py             # จับภาพ/log ก่อน–หลังขั้นตอนและเมื่อ error
   retry.py                  # เริ่มใหม่เมื่อค้นหาศูนย์ไม่พบ
   errors.py                 # ประเภท error ที่ใช้ควบคุม retry
   ui.py                     # อ่านและตรวจข้อความใน UI
@@ -26,7 +28,7 @@ bkk_active/
     review.py               # ส่ง Review และจบ flow
 tools/android-text-input/   # source และ build script ตัวช่วยภาษาไทย
 tests/                      # tests ตัวเลือกและการส่งต่อระหว่าง flow
-artifacts/                  # ภาพ/XML ที่สร้างตอนรัน (ไม่เข้า git)
+logger/                     # ผลแต่ละรอบรัน (ไม่เข้า git)
 ```
 
 ## การทำงาน
@@ -51,8 +53,26 @@ retry เฉพาะกรณีค้นหาศูนย์ไม่พบ �
 สคริปต์เปิดแอปใหม่ทุกครั้ง และส่งการจองเมื่อเลือกเวลาได้
 เมื่อถึงหน้า **Booking Review** จะกดปุ่มสีส้ม **Review** ตามค่าที่หน้าแอปมีอยู่แล้ว
 แล้วจบ flow หลังออกจากหน้ารีวิวหรือได้รับข้อความตอบรับ
-บันทึกภาพและ UI ก่อน Submit และผลหลัง Submit ใน `artifacts/`
-รวมถึงภาพก่อนและหลังส่ง Review
+แต่ละรอบรันสร้าง `logger/<timestamp>/` ตามเวลาไทย และเก็บ:
+
+```text
+logger/2026-10-12_23-00-00_123456/
+  run.log           # แต่ละเวลาทำอะไร รวม error และ traceback
+  screenshots/      # ภาพ PNG ตามลำดับ เวลา ขั้นตอน และหมายเลข retry
+  ui/               # XML ของหน้าจอ ใช้แก้ selector/ตำแหน่งปุ่ม
+  timeline.jsonl    # เวลา ขั้นตอน retry และ path ภาพ/XML ที่จับคู่กัน
+```
+
+เก็บภาพหน้าจอที่เปลี่ยนระหว่างแต่ละขั้นตอน รวม dialog, การค้นหา, สนามและเวลา,
+ก่อน/หลัง Submit และ Review ตลอดจนตอน error
+การ retry ทั้ง 4 รอบอยู่ในโฟลเดอร์ timestamp เดียวกัน ภาพระบุ `attempt-01` ถึง `attempt-04`
+ภาพหน้าจอที่เหมือนเดิมในขั้นตอนเดียวกันจะไม่ถูกเก็บซ้ำในทุกครั้งที่ polling
+
+แต่ละ flow ใช้ `@flow_step("ชื่อขั้นตอน")` จาก `middleware.py`
+middleware บันทึกเริ่ม–จบ ระยะเวลาที่ใช้ ภาพก่อน/หลังขั้นตอน และ traceback เมื่อเกิด error
+รวมถึงจับภาพเมื่อ UI เปลี่ยน และก่อนคำสั่งกด เลื่อน หรือปิดแอป
+ขั้นตอนย่อยมีชื่อเช่น `court-list/court-schedule/choose-date` เพื่อไล่เหตุการณ์ได้
+การเก็บภาพล้มเหลวจะถูก log เป็น WARNING และไม่ทำให้การกด Submit/Review ถูกเรียกซ้ำ
 ถ้ายืนยันผลไม่ได้ จะ log ERROR และหยุดโดยไม่กด Submit ซ้ำ
 
 ต้องมี Python 3, Android SDK Platform Tools และติดตั้ง BKK Active บน emulator

@@ -10,14 +10,18 @@ from .logging_setup import LOGGER
 from .ui import bounds
 from .run_artifacts import get_run_artifacts
 from .middleware import CaptureLoggingMiddleware
+from .android_bridge import AndroidBridge
 
 
 class AndroidDevice:
-    def __init__(self, serial):
+    def __init__(self, serial, ui_backend="bridge"):
         self.serial = serial
         self.middleware = CaptureLoggingMiddleware(get_run_artifacts())
         self.cached_root = None
         self.cache_valid = False
+        self.ui_backend = ui_backend
+        self.bridge = AndroidBridge(self)
+        self.bridge_failed = False
         self.adb = os.environ.get('ADB') or shutil.which('adb')
         if not self.adb:
             self.adb = str(Path.home() / 'Library/Android/sdk/platform-tools/adb')
@@ -59,13 +63,33 @@ class AndroidDevice:
             return self.cached_root
         started = time.perf_counter()
         try:
-            xml = self.run("shell", "uiautomator dump /sdcard/bkk-active-ui.xml >/dev/null && cat /sdcard/bkk-active-ui.xml")
-            root = ET.fromstring(xml)
+            if getattr(self, "ui_backend", "uiautomator") == "bridge" and not self.bridge_failed:
+                try:
+                    root = self.bridge.read_ui()
+                    self.record_metric("bridge_ui_read", time.perf_counter() - started)
+                except (RuntimeError, subprocess.TimeoutExpired, OSError) as error:
+                    self.record_metric("bridge_ui_failure", time.perf_counter() - started)
+                    LOGGER.warning("Android bridge ใช้ไม่ได้ กลับไปอ่าน UI แบบเดิม: %s", error)
+                    self.bridge_failed = True
+                    root = self.read_ui_legacy()
+            else:
+                root = self.read_ui_legacy()
         finally:
             self.record_metric("ui_read", time.perf_counter() - started)
         self.cached_root, self.cache_valid = root, True
         self.middleware.observe_ui(self, root)
         return root
+
+    def read_ui_legacy(self):
+        started = time.perf_counter()
+        try:
+            xml = self.run("shell", "uiautomator dump /sdcard/bkk-active-ui.xml >/dev/null && cat /sdcard/bkk-active-ui.xml")
+            return ET.fromstring(xml)
+        finally:
+            self.record_metric("legacy_ui_read", time.perf_counter() - started)
+
+    def set_search_text(self, text):
+        self.bridge.set_text(text)
 
     def screenshot_raw(self):
         started = time.perf_counter()

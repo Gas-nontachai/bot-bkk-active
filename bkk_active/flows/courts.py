@@ -1,4 +1,4 @@
-"""Compare courts and return the earliest suitable one-hour slot."""
+"""Compare courts and return one app-defined slot closest to 18:00."""
 from ..middleware import flow_step
 import re
 from ..ui import activity_button, ui_labels
@@ -60,18 +60,18 @@ def choose_court_slot(device, config):
             LOGGER.info("ไม่มี %s ในรายการ ข้ามไปสนามถัดไป", name)
             continue
         root = open_court(device, config, number, court)
-        LOGGER.info("ตรวจ %s: ต้องว่าง 1 ชั่วโมง ภายใน 18:00–21:00", name)
+        LOGGER.info("ตรวจ %s: เลือก 1 ช่องที่ว่าง ภายใน 18:00–21:00", name)
         slot = find_evening_slot(device, config, root)
         if slot is not None:
             _, interval = slot
             LOGGER.info("พบตัวเลือก: %s เวลา %s", name, interval)
-            if interval == "18:00–19:00":
+            if interval.startswith("18:00–"):
                 LOGGER.info("พบเวลาเริ่ม 18:00 ตรงเป้าหมาย เลือกทันที")
                 return number, slot
             candidates.append((number, interval))
             LOGGER.info("เก็บตัวเลือกไว้ แล้วตรวจสนามอื่นเพื่อหาเวลาที่ใกล้ 18:00 กว่า")
         else:
-            LOGGER.info("ไม่มีเวลาว่าง 1 ชั่วโมงช่วง 18:00–21:00 ที่ %s", name)
+            LOGGER.info("ไม่มีช่องว่างช่วง 18:00–21:00 ที่ %s", name)
         back_to_courts(device, config)
 
     for number, interval in ranked_courts(candidates):
@@ -86,4 +86,4 @@ def choose_court_slot(device, config):
             return number, slot
         LOGGER.info("สนาม %d เวลา %s ไม่ว่างแล้ว ข้ามไปตัวเลือกถัดไป", number, interval)
         back_to_courts(device, config)
-    status("ไม่มีเวลาว่าง 1 ชั่วโมงช่วง 18:00–21:00 วันที่ %s จบสคริปต์", config.date.isoformat())
+    status("ไม่มีช่องว่างช่วง 18:00–21:00 วันที่ %s จบสคริปต์", config.date.isoformat())

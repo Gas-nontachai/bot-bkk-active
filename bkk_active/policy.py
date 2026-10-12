@@ -1,4 +1,4 @@
-"""One-hour availability and court ranking near 18:00."""
+"""App-defined available slots and court ranking near 18:00."""
 import re
 from .config import PACKAGE, TIME_RANGE
 from .ui import bounds, ui_labels
@@ -23,7 +23,7 @@ def available_slot(root, start_minute=18 * 60, end_minute=21 * 60, exact_interva
         h1, m1, h2, m2 = next(iter(ranges))
         begin, end = h1 * 60 + m1, h2 * 60 + m2
         if not (0 <= h1 < 24 and 0 <= h2 <= 24 and m1 < 60 and m2 < 60
-                and start_minute <= begin < end <= end_minute and end - begin == 60):
+                and start_minute <= begin < end <= end_minute):
             continue
         area = (rect[2] - rect[0]) * (rect[3] - rect[1])
         choices.append((begin, area, node, f"{h1:02d}:{m1:02d}–{h2:02d}:{m2:02d}"))

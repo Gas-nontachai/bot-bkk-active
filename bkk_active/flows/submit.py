@@ -1,8 +1,9 @@
 """Validate the booking summary and submit once."""
 from ..middleware import flow_step
-from ..ui import confirmation_matches, is_review_page, ui_labels
+from ..ui import confirmation_matches, is_payment_page, is_review_page, ui_labels
 from ..vision import orange_submit_center
 from .review import submit_review
+from .payment import defer_payment
 import time
 from ..logging_setup import LOGGER
 
@@ -10,7 +11,7 @@ from ..logging_setup import LOGGER
 @flow_step("submit-booking")
 def select_slot(device, config, number, slot):
     node, interval = slot
-    LOGGER.info("เลือกสิทธิ์ 1 ชั่วโมง: สนามแบดมินตัน %d วันที่ %s เวลา %s",
+    LOGGER.info("เลือก 1 ช่องจอง: สนามแบดมินตัน %d วันที่ %s เวลา %s",
                 number, config.date.isoformat(), interval)
     device.tap(node)
     LOGGER.info("รอหน้ายืนยันการจอง")
@@ -33,6 +34,10 @@ def select_slot(device, config, number, slot):
                        and confirmation_matches(root, config.date, number, interval)))
         if failed:
             raise RuntimeError(f"แอปแจ้งข้อผิดพลาดหลัง Submit: {text}")
+        if is_payment_page(root):
+            review_root = defer_payment(device, config, root, number, interval)
+            submit_review(device, config, review_root)
+            return
         if is_review_page(root):
             LOGGER.info("ถึงหน้า Booking Review หลัง Submit การจอง")
             submit_review(device, config, root)

@@ -9,7 +9,7 @@ from .flows.submit import select_slot
 
 
 def run_flow(config):
-    device = AndroidDevice(config.serial)
+    device = AndroidDevice(config.serial, ui_backend=getattr(config, "ui_backend", "bridge"))
     launch(device, config)
     root = open_booking(device, config)
     if not search_center(device, config, root):

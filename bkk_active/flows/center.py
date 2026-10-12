@@ -1,8 +1,5 @@
 """Search for a center and enter its activity list."""
 from ..middleware import flow_step
-import base64
-import subprocess
-from ..config import PROJECT_ROOT
 from ..errors import CenterNotFound
 from ..ui import bounds
 import time
@@ -20,22 +17,8 @@ def search_center(device, config, root):
     if field is None:
         raise RuntimeError("ไม่พบช่องค้นหาศูนย์บริการ")
     device.tap(field)
-    helper_dir = PROJECT_ROOT / "tools" / "android-text-input"
-    apk = helper_dir / ".build/text-input.apk"
-    if not apk.exists():
-        LOGGER.info("สร้างตัวช่วยป้อนข้อความภาษาไทย")
-        result = subprocess.run(["sh", str(helper_dir / "build.sh")],
-                                capture_output=True, text=True, timeout=120)
-        if result.returncode:
-            raise RuntimeError(f"สร้างตัวช่วยไม่ได้: {result.stderr.strip()}")
-    LOGGER.info("ติดตั้งตัวช่วยป้อนข้อความบน %s", config.serial)
-    device.run("install", "-r", str(apk))
     LOGGER.info("พิมพ์ค้นหา: %s", config.center)
-    encoded = base64.b64encode(config.center.encode("utf-8")).decode("ascii")
-    output = device.run("shell", "am", "instrument", "-w", "-e", "text64", encoded,
-                 "local.bkkactive.textinput/local.bkkactive.textinput.TextInput")
-    if "TEXT_SET_OK" not in output:
-        raise RuntimeError(f"ป้อนชื่อศูนย์ไม่ได้: {output.strip()}")
+    device.set_search_text(config.center)
     root = device.read_ui()
     if not any(item.get("class") == "android.widget.EditText"
                and item.get("text") == config.center for item in root.iter("node")):

@@ -44,9 +44,15 @@ def selected_date_matches(root, target):
 
 def confirmation_matches(root, target, court_number, interval):
     labels = ui_labels(root)
-    text = " ".join(labels)
     if any(title in labels for title in ("เลือกจองวัน-เวลา", "เลือกกิจกรรม", "เลือกศูนย์กีฬา")):
         return False
+    if is_payment_page(root) or is_review_page(root):
+        return False
+    return booking_details_match(root, target, court_number, interval)
+
+
+def booking_details_match(root, target, court_number, interval):
+    text = " ".join(ui_labels(root))
     date_ok = selected_date_matches(root, target) or any(
         re.search(rf"(?<!\d)0?{target.day}[/.-]0?{target.month}[/.-]{year}(?!\d)", text)
         for year in (target.year, target.year + 543))
@@ -56,6 +62,35 @@ def confirmation_matches(root, target, court_number, interval):
     hour, minute = map(int, begin.split(":"))
     time_ok = bool(re.search(rf"(?<!\d)0?{hour}:{minute:02d}(?!\d)", text))
     return bool(date_ok and court_ok and time_ok)
+
+
+def payment_later_button(root):
+    parents = {child: parent for parent in root.iter() for child in parent}
+    names = ("ชำระภายหลัง", "ชำระเงินภายหลัง", "pay later")
+    for node in root.iter("node"):
+        if node.get("package") != PACKAGE or node.get("enabled") == "false":
+            continue
+        labels = (node.get("text", "").strip().lower(),
+                  node.get("content-desc", "").split(",", 1)[0].strip().lower())
+        if not any(label in names for label in labels):
+            continue
+        candidate = node
+        while candidate is not None:
+            if candidate.get("enabled") == "false":
+                break
+            # A full-page container also contains the orange pay-now button.
+            if any(label.lower() in ("ชำระเงิน", "pay now") for label in ui_labels(candidate)):
+                break
+            if candidate.get("clickable") == "true" and bounds(candidate):
+                return candidate
+            candidate = parents.get(candidate)
+    return None
+
+
+def is_payment_page(root):
+    labels = [label.lower() for label in ui_labels(root)]
+    return (any(title in labels for title in ("ชำระเงิน", "payment", "payments"))
+            and any(name in labels for name in ("ชำระภายหลัง", "ชำระเงินภายหลัง", "pay later")))
 
 
 def is_review_page(root):

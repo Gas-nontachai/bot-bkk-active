@@ -29,6 +29,14 @@ def schedule(*entries):
 
 
 class BookingSelectionTests(unittest.TestCase):
+    def test_slots_can_start_at_nonzero_minutes(self):
+        root = schedule(("19:00 - 20:00", "ว่าง"), ("18:20 - 19:20", "ว่าง"))
+        self.assertEqual(available_slot(root)[1], "18:20–19:20")
+
+    def test_court_ranking_compares_minutes_not_only_hours(self):
+        self.assertEqual(ranked_courts([(1, "18:40–19:40"), (2, "18:20–19:20")])[0],
+                         (2, "18:20–19:20"))
+
     @patch("bkk_active.retry.time.sleep")
     def test_missing_center_retries_three_times_after_first_attempt(self, sleep):
         calls = []
@@ -104,10 +112,9 @@ class BookingSelectionTests(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 orange_submit_center(self.screen(buttons))
 
-    def test_one_hour_only(self):
-        root = schedule(("18:00 - 20:00", "ว่าง"), ("18:00 - 18:30", "ว่าง"),
-                        ("19:00 - 20:00", "ว่าง"))
-        self.assertEqual(available_slot(root)[1], "19:00–20:00")
+    def test_app_defined_slot_can_last_seventy_minutes(self):
+        root = schedule(("19:00 - 20:00", "ว่าง"), ("18:20 - 19:30", "ว่าง"))
+        self.assertEqual(available_slot(root)[1], "18:20–19:30")
 
     def test_global_ranking_prefers_earlier_time_on_later_court(self):
         self.assertEqual(ranked_courts([(1, "20:00–21:00"), (3, "19:00–20:00"),

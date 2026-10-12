@@ -59,7 +59,7 @@ class CaptureLoggingMiddleware:
             return
         LOGGER.info("ทำงาน [%s]: %s", self.current_step, " ".join(command))
         critical = action == "close-app" or (action == "input-tap" and
-                    any(step in self.current_step for step in ("submit-booking", "review")))
+                    any(step in self.current_step for step in ("submit-booking", "pay-later", "review")))
         if self.debug_capture or critical:
             self._capture(device, f"{self.current_step}-before-{action}", self.last_root, force=True)
 
@@ -72,11 +72,11 @@ class CaptureLoggingMiddleware:
             self.artifacts.set_step(label)
         started = time.monotonic()
         LOGGER.info("เริ่มขั้นตอน %s", label)
-        if previous == "start" or name == "review":
+        if previous == "start" or name in ("pay-later", "review"):
             descriptions = {"launch": "เปิดแอป", "booking": "เข้าหน้าจอง",
                             "center-search": "ค้นหาศูนย์กีฬา", "activity": "เลือกแบดมินตัน",
                             "court-list": "ตรวจสอบสนามและเวลาว่าง", "submit-booking": "ยืนยันการจอง",
-                            "review": "ส่งรีวิว"}
+                            "pay-later": "เลือกชำระภายหลัง", "review": "ส่งรีวิว"}
             status("กำลัง%s", descriptions.get(name, name))
         if self.debug_capture:
             self._capture(device, f"{label}-before", force=True)
@@ -96,7 +96,7 @@ class CaptureLoggingMiddleware:
                 self._capture(device, f"{label}-error", force=True)
             raise
         else:
-            if self.debug_capture or name in ("center-search", "submit-booking", "review"):
+            if self.debug_capture or name in ("center-search", "submit-booking", "pay-later", "review"):
                 root = self.last_root if (not self.debug_capture and
                         getattr(device, "cache_valid", False)) else None
                 self._capture(device, f"{label}-after", root, force=True)

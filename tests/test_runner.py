@@ -45,6 +45,19 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(choice, (2, preferred))
         self.assertEqual(back.call_count, 1)
 
+    def test_app_slot_starting_at_18_is_selected_without_fixed_end_time(self):
+        device = Mock()
+        config = SimpleNamespace()
+        slot = (object(), "18:00–19:10")
+        with patch("bkk_active.flows.courts.locate_court", return_value=object()), \
+                patch("bkk_active.flows.courts.open_court"), \
+                patch("bkk_active.flows.courts.find_evening_slot", return_value=slot) as find, \
+                patch("bkk_active.flows.courts.back_to_courts") as back:
+            choice = choose_court_slot(device, config)
+        self.assertEqual(choice, (1, slot))
+        find.assert_called_once()
+        back.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -4,7 +4,7 @@ import xml.etree.ElementTree as ET
 from datetime import date
 
 from open_booking import (PACKAGE, activity_button, available_slot, confirmation_matches,
-                         orange_submit_center, ranked_courts, selected_date_matches)
+                         is_review_page, orange_submit_center, ranked_courts, selected_date_matches)
 
 
 def node(**attributes):
@@ -24,6 +24,16 @@ def schedule(*entries):
 
 
 class BookingSelectionTests(unittest.TestCase):
+    def test_review_screen_recognized_in_both_languages(self):
+        for title in ("Booking Review", "ประเมินการจอง", "รีวิวการจอง"):
+            root = node()
+            root.append(node(text=title))
+            self.assertTrue(is_review_page(root))
+        root = node()
+        root.append(node(text="Confirm Booking"))
+        root.append(node(text="Submit"))
+        self.assertFalse(is_review_page(root))
+
     def test_confirmation_requires_correct_court_date_and_time(self):
         root = node()
         for text in ("Confirm Booking", "13/10/2569", "18:00 น.", "สนามแบดมินตัน 2"):

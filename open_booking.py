@@ -134,6 +134,13 @@ def confirmation_matches(root, target, court_number, interval):
     return bool(date_ok and court_ok and time_ok)
 
 
+def is_review_page(root):
+    labels = [label.lower() for label in ui_labels(root)]
+    return any(title in label for label in labels for title in (
+        "booking review", "รีวิวการจอง", "ประเมินการจอง", "ให้คะแนนการจอง",
+        "ประเมินความพึงพอใจ")) or ("review" in labels and "booking rating" in labels)
+
+
 def orange_submit_center(raw):
     """หาปุ่มส้มกว้างด้านล่างจาก Android screencap RGBA โดยไม่ใช้ชื่อปุ่ม."""
     if len(raw) < 16:
@@ -372,6 +379,7 @@ def main():
         x, y = orange_submit_center(image.stdout)
         LOGGER.info("กดปุ่ม Submit สีส้มที่ (%d, %d)", x, y)
         run("shell", "input", "tap", str(x), str(y))
+        booking_logged = False
         deadline = time.monotonic() + 25
         while time.monotonic() < deadline:
             root = read_ui()
@@ -383,16 +391,50 @@ def main():
             if failed:
                 capture(root, "submit-error")
                 raise RuntimeError(f"แอปแจ้งข้อผิดพลาดหลัง Submit: {text}")
-            if success:
+            if is_review_page(root):
+                LOGGER.info("ถึงหน้า Booking Review หลัง Submit การจอง")
+                submit_review(root)
+                return
+            if success and not booking_logged:
                 capture(root, "submit-success")
                 LOGGER.info("จองสำเร็จ: สนาม %d วันที่ %s เวลา %s", number, args.date.isoformat(), interval)
-                dismiss_dialog(root)
-                return
+                booking_logged = True
             if dismiss_dialog(root):
                 LOGGER.info("ปิด dialog หลัง Submit รอตรวจผลการจอง")
             time.sleep(1)
         capture(root, "submit-result-unknown")
+        if booking_logged:
+            raise RuntimeError("จองสำเร็จแล้ว แต่ไม่พบหน้า Booking Review จึงยังส่งรีวิวไม่ได้")
         raise RuntimeError("กด Submit แล้ว แต่ยังยืนยันผลไม่ได้ เก็บภาพไว้และไม่กด Submit ซ้ำ")
+
+    def submit_review(root):
+        capture(root, "before-review")
+        image = subprocess.run([adb, "-s", args.serial, "exec-out", "screencap"],
+                               capture_output=True, timeout=15)
+        if image.returncode:
+            raise RuntimeError("อ่านภาพหน้าจอรีวิวไม่ได้")
+        x, y = orange_submit_center(image.stdout)
+        LOGGER.info("กดปุ่ม Review สีส้มที่ (%d, %d)", x, y)
+        run("shell", "input", "tap", str(x), str(y))
+        deadline = time.monotonic() + 20
+        while time.monotonic() < deadline:
+            root = read_ui()
+            labels = ui_labels(root)
+            text = " ".join(labels).lower()
+            if any(word in text for word in ("ไม่สำเร็จ", "ผิดพลาด", "ไม่สามารถ", "failed")):
+                capture(root, "review-error")
+                raise RuntimeError(f"แอปแจ้งข้อผิดพลาดหลัง Review: {text}")
+            if (labels and not is_review_page(root)) or any(word in text for word in (
+                    "รีวิวสำเร็จ", "ประเมินสำเร็จ", "review submitted", "ขอบคุณ", "thank you")):
+                capture(root, "after-review")
+                LOGGER.info("ส่ง Review แล้วและออกจากหน้ารีวิว/ได้รับข้อความตอบรับ จบ flow")
+                dismiss_dialog(root)
+                return
+            if dismiss_dialog(root):
+                LOGGER.info("ปิด dialog หลัง Review รอตรวจผล")
+            time.sleep(1)
+        capture(root, "review-result-unknown")
+        raise RuntimeError("กด Review แล้ว แต่ยังไม่ออกจากหน้ารีวิว เก็บภาพไว้และไม่กดซ้ำ")
 
     LOGGER.info("เริ่มสคริปต์: อุปกรณ์=%s, ศูนย์=%s, วันที่=%s, เวลา=18:00–21:00",
                 args.serial, args.center, args.date.isoformat())

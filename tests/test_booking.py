@@ -4,9 +4,12 @@ from unittest.mock import patch
 import xml.etree.ElementTree as ET
 from datetime import date
 
-from open_booking import (PACKAGE, activity_button, available_slot, confirmation_matches,
-                         CenterNotFound, is_review_page, orange_submit_center, ranked_courts,
-                         retry_missing_center, selected_date_matches)
+from bkk_active.config import PACKAGE
+from bkk_active.errors import CenterNotFound
+from bkk_active.ui import activity_button, confirmation_matches, is_review_page, selected_date_matches
+from bkk_active.policy import available_slot, ranked_courts
+from bkk_active.retry import retry_missing_center
+from bkk_active.vision import orange_submit_center
 
 
 def node(**attributes):
@@ -26,7 +29,7 @@ def schedule(*entries):
 
 
 class BookingSelectionTests(unittest.TestCase):
-    @patch("open_booking.time.sleep")
+    @patch("bkk_active.retry.time.sleep")
     def test_missing_center_retries_three_times_after_first_attempt(self, sleep):
         calls = []
         def action():
@@ -36,7 +39,7 @@ class BookingSelectionTests(unittest.TestCase):
         self.assertEqual(len(calls), 4)
         self.assertEqual(sleep.call_count, 3)
 
-    @patch("open_booking.time.sleep")
+    @patch("bkk_active.retry.time.sleep")
     def test_retry_stops_when_flow_finishes(self, sleep):
         calls = []
         def action():

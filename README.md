@@ -1,5 +1,36 @@
 # BKK Active automation
 
+## โครงสร้างโปรเจกต์
+
+```text
+open_booking.py             # จุดเริ่มรัน CLI
+bkk_active/
+  cli.py                    # รับ arguments และเริ่ม retry
+  runner.py                 # เรียก flow ตามลำดับ
+  config.py                 # package, activity, path และค่าคงที่
+  device.py                 # ADB, tap, scroll, wait, screenshot
+  logging_setup.py          # INFO/ERROR พร้อมเวลาไทย
+  retry.py                  # เริ่มใหม่เมื่อค้นหาศูนย์ไม่พบ
+  errors.py                 # ประเภท error ที่ใช้ควบคุม retry
+  ui.py                     # อ่านและตรวจข้อความใน UI
+  policy.py                 # สิทธิ์ 1 ชั่วโมงและจัดอันดับเวลา
+  vision.py                 # หาปุ่มสีส้มจากภาพ
+  flows/
+    launch.py               # เปิดแอป
+    booking.py              # จองคิว → สร้างการจองใหม่
+    center.py               # ค้นหาศูนย์กีฬา
+    activity.py             # เลือกสนามแบดมินตัน
+    courts.py               # เปรียบเทียบสนามและเลือกตัวเลือก
+    schedule.py             # เลือกวันที่และหาเวลาว่าง
+    submit.py               # เลือกเวลาและ Submit การจอง
+    review.py               # ส่ง Review และจบ flow
+tools/android-text-input/   # source และ build script ตัวช่วยภาษาไทย
+tests/                      # tests ตัวเลือกและการส่งต่อระหว่าง flow
+artifacts/                  # ภาพ/XML ที่สร้างตอนรัน (ไม่เข้า git)
+```
+
+## การทำงาน
+
 สคริปต์ง่าย ๆ สำหรับเปิด BKK Active บน Android emulator เข้าแท็บ **จองคิว**
 กด **ตกลง** หากมี dialog แล้วกด **สร้างการจองใหม่**
 จากนั้นพิมพ์ **ศูนย์กีฬาเบญจกิติ** ในช่องค้นหา แล้วกดผลลัพธ์ที่ตรงชื่อ
@@ -25,7 +56,7 @@ retry เฉพาะกรณีค้นหาศูนย์ไม่พบ �
 ถ้ายืนยันผลไม่ได้ จะ log ERROR และหยุดโดยไม่กด Submit ซ้ำ
 
 ต้องมี Python 3, Android SDK Platform Tools และติดตั้ง BKK Active บน emulator
-ครั้งแรกสคริปต์จะ build และติดตั้ง APK ตัวช่วยป้อนภาษาไทยจาก source ใน `android-text-input/`
+ครั้งแรกสคริปต์จะ build และติดตั้ง APK ตัวช่วยป้อนภาษาไทยจาก source ใน `tools/android-text-input/`
 ใช้ Android SDK Build Tools 36.0.0, platform android-36 และ Java จาก Android Studio
 ตั้ง `ANDROID_SDK_ROOT` และ `JAVA_HOME` ได้หากติดตั้งไว้ที่อื่น ตัวช่วยไม่มีหน้าแอปและไม่เปลี่ยนคีย์บอร์ด
 
@@ -58,3 +89,9 @@ python3 open_booking.py | tee booking.log
 หากมี dialog ที่มีปุ่ม **ตกลง** สคริปต์จะกดปิดอัตโนมัติ
 การปิดข้อความยืนยันตัวตนไม่ได้เปลี่ยนสถานะการยืนยันตัวตนของบัญชี
 หากเลือกศูนย์แล้วแอปแจ้งว่าต้องสมัครสมาชิก สคริปต์จะ log เหตุผลและหยุด
+
+## ทดสอบ
+
+```sh
+python3 -m unittest discover -s tests -v
+```

@@ -1,4 +1,4 @@
 __pycache__/
-android-text-input/.build/
+tools/android-text-input/.build/
 *.log
 artifacts/

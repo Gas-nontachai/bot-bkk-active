@@ -42,6 +42,25 @@ def bounds(node):
     return (x1, y1, x2, y2) if x2 > x1 and y2 > y1 else None
 
 
+def activity_button(root, name="สนามแบดมินตัน"):
+    """เลือกการ์ดชื่อตรงกัน เพื่อไม่กดรายการแบดมินตัน รอบเย็น."""
+    parents = {child: parent for parent in root.iter() for child in parent}
+    for node in root.iter("node"):
+        if node.get("package") != PACKAGE:
+            continue
+        text = node.get("text", "").strip()
+        description = node.get("content-desc", "").split(",", 1)[0].strip()
+        if name not in (text, description):
+            continue
+        candidate = node
+        while candidate is not None:
+            if (candidate.get("clickable") == "true"
+                    and candidate.get("enabled") == "true" and bounds(candidate)):
+                return candidate
+            candidate = parents.get(candidate)
+    return None
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--serial", default="emulator-5554", help="ADB device serial")
@@ -232,11 +251,42 @@ def main():
         if "ไม่สามารถจองเข้าใช้บริการได้" in labels:
             LOGGER.info("กดเข้าศูนย์แล้ว แต่แอปแจ้งว่าไม่สามารถจองเข้าใช้บริการได้: ต้องสมัครสมาชิกศูนย์นี้ จบสคริปต์")
             return
-        if args.center in labels and "เลือกศูนย์กีฬา" not in labels:
-            LOGGER.info("สำเร็จ: เข้าหน้า %s แล้ว จบสคริปต์", args.center)
+        if "เลือกกิจกรรม" in labels:
+            LOGGER.info("เข้าหน้าเลือกกิจกรรมแล้ว")
+            break
+        time.sleep(1)
+    else:
+        raise RuntimeError(f"กด {args.center} แล้ว แต่ยังไม่พบหน้าเลือกกิจกรรม")
+
+    LOGGER.info("ค้นหากิจกรรม สนามแบดมินตัน")
+    deadline = time.monotonic() + 15
+    while time.monotonic() < deadline:
+        root = read_ui()
+        if dismiss_dialog(root):
+            time.sleep(1)
+            continue
+        node = activity_button(root)
+        if node is not None:
+            LOGGER.info("พบกิจกรรม: กด สนามแบดมินตัน")
+            tap(node)
+            break
+        time.sleep(1)
+    else:
+        LOGGER.info("ไม่มี สนามแบดมินตัน บนหน้ากิจกรรม จบสคริปต์")
+        return
+
+    deadline = time.monotonic() + 15
+    while time.monotonic() < deadline:
+        root = read_ui()
+        if dismiss_dialog(root):
+            time.sleep(1)
+            continue
+        app_nodes = [item for item in root.iter("node") if item.get("package") == PACKAGE]
+        if app_nodes and not any(item.get("text") == "เลือกกิจกรรม" for item in app_nodes):
+            LOGGER.info("กดสนามแบดมินตันและออกจากหน้าเลือกกิจกรรมแล้ว จบสคริปต์")
             return
         time.sleep(1)
-    raise RuntimeError(f"กด {args.center} แล้ว แต่ยังยืนยันหน้าถัดไปไม่ได้")
+    raise RuntimeError("กดสนามแบดมินตันแล้ว แต่ยังไม่ออกจากหน้าเลือกกิจกรรม")
 
 
 if __name__ == "__main__":

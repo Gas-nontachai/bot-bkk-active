@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import struct
 import subprocess
 import sys
 import time
@@ -117,6 +118,63 @@ def ranked_courts(choices):
     return sorted(choices, key=lambda choice: (int(choice[1][:2]) * 60 + int(choice[1][3:5]), choice[0]))
 
 
+def confirmation_matches(root, target, court_number, interval):
+    labels = ui_labels(root)
+    text = " ".join(labels)
+    if any(title in labels for title in ("เลือกจองวัน-เวลา", "เลือกกิจกรรม", "เลือกศูนย์กีฬา")):
+        return False
+    date_ok = selected_date_matches(root, target) or any(
+        re.search(rf"(?<!\d)0?{target.day}[/.-]0?{target.month}[/.-]{year}(?!\d)", text)
+        for year in (target.year, target.year + 543))
+    court_ok = bool(re.search(rf"สนามแบดมินตัน\s*{court_number}(?!\d)", text)
+                    or re.search(rf"badminton(?: court)?[^,\n]*?\b{court_number}\b", text, re.I))
+    begin = interval.split("–")[0]
+    hour, minute = map(int, begin.split(":"))
+    time_ok = bool(re.search(rf"(?<!\d)0?{hour}:{minute:02d}(?!\d)", text))
+    return bool(date_ok and court_ok and time_ok)
+
+
+def orange_submit_center(raw):
+    """หาปุ่มส้มกว้างด้านล่างจาก Android screencap RGBA โดยไม่ใช้ชื่อปุ่ม."""
+    if len(raw) < 16:
+        raise RuntimeError("ภาพหน้าจอไม่สมบูรณ์")
+    width, height, pixel_format = struct.unpack_from("<3I", raw)
+    offset = len(raw) - width * height * 4
+    if pixel_format != 1 or offset not in (12, 16) or width == 0 or height == 0:
+        raise RuntimeError("รูปแบบภาพหน้าจอไม่รองรับ ต้องเป็น Android RGBA_8888")
+    step = max(1, width // 180)
+    columns, rows = (width + step - 1) // step, (height + step - 1) // step
+    orange = set()
+    for gy in range(rows * 55 // 100, rows):
+        for gx in range(columns):
+            pos = offset + ((gy * step) * width + gx * step) * 4
+            red, green, blue = raw[pos:pos + 3]
+            if red >= 185 and 40 <= green <= 190 and blue < 100 and red > green * 1.35:
+                orange.add((gx, gy))
+    candidates = []
+    while orange:
+        seed = orange.pop()
+        stack, component = [seed], [seed]
+        while stack:
+            x, y = stack.pop()
+            for neighbor in ((x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1)):
+                if neighbor in orange:
+                    orange.remove(neighbor)
+                    component.append(neighbor)
+                    stack.append(neighbor)
+        x1 = min(point[0] for point in component) * step
+        x2 = min(width, (max(point[0] for point in component) + 1) * step)
+        y1 = min(point[1] for point in component) * step
+        y2 = min(height, (max(point[1] for point in component) + 1) * step)
+        fill = len(component) * step * step / ((x2 - x1) * (y2 - y1))
+        if (x2 - x1 >= width * 0.5 and height * 0.02 <= y2 - y1 <= height * 0.13
+                and fill >= 0.55 and y2 <= height * 0.98):
+            candidates.append(((x1 + x2) // 2, (y1 + y2) // 2))
+    if len(candidates) != 1:
+        raise RuntimeError(f"หาปุ่ม Submit สีส้มที่ชัดเจนไม่ได้: พบ {len(candidates)} ปุ่ม")
+    return candidates[0]
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--serial", default="emulator-5554", help="ADB device serial")
@@ -144,6 +202,19 @@ def main():
     def read_ui():
         run("shell", "uiautomator", "dump", "/sdcard/bkk-active-ui.xml")
         return ET.fromstring(run("shell", "cat", "/sdcard/bkk-active-ui.xml"))
+
+    def capture(root, label):
+        folder = Path(__file__).resolve().parent / "artifacts" / datetime.now(
+            ZoneInfo("Asia/Bangkok")).strftime("%Y%m%d-%H%M%S-%f")
+        folder.mkdir(parents=True, exist_ok=True)
+        ET.ElementTree(root).write(folder / f"{label}.xml", encoding="utf-8", xml_declaration=True)
+        image = subprocess.run([adb, "-s", args.serial, "exec-out", "screencap", "-p"],
+                               capture_output=True, timeout=15)
+        if image.returncode:
+            raise RuntimeError("บันทึกภาพหน้าจอไม่สำเร็จ")
+        (folder / f"{label}.png").write_bytes(image.stdout)
+        LOGGER.info("บันทึกภาพและ UI: %s", folder)
+        return folder
 
     def booking_tab(root):
         return next((node for node in root.iter("node")
@@ -288,7 +359,40 @@ def main():
         LOGGER.info("เลือกสิทธิ์ 1 ชั่วโมง: สนามแบดมินตัน %d วันที่ %s เวลา %s",
                     number, args.date.isoformat(), interval)
         tap(node)
-        LOGGER.info("กดเลือกช่วงเวลาแล้ว จบสคริปต์")
+        LOGGER.info("รอหน้ายืนยันการจอง")
+        root = wait_for(lambda ui: confirmation_matches(ui, args.date, number, interval),
+                        "ไม่พบหน้ายืนยันที่วัน สนาม และเวลาตรงกับตัวเลือก จึงไม่ได้กด Submit")
+        capture(root, "before-submit")
+        LOGGER.info("ตรวจข้อมูลยืนยันตรงกัน: วันที่=%s สนาม=%d เวลา=%s",
+                    args.date.isoformat(), number, interval)
+        image = subprocess.run([adb, "-s", args.serial, "exec-out", "screencap"],
+                               capture_output=True, timeout=15)
+        if image.returncode:
+            raise RuntimeError("อ่านภาพหน้าจอเพื่อหาปุ่มสีส้มไม่ได้")
+        x, y = orange_submit_center(image.stdout)
+        LOGGER.info("กดปุ่ม Submit สีส้มที่ (%d, %d)", x, y)
+        run("shell", "input", "tap", str(x), str(y))
+        deadline = time.monotonic() + 25
+        while time.monotonic() < deadline:
+            root = read_ui()
+            text = " ".join(ui_labels(root)).lower()
+            failed = any(word in text for word in ("ไม่สำเร็จ", "ผิดพลาด", "ไม่สามารถ", "failed"))
+            success = (any(word in text for word in ("จองสำเร็จ", "การจองสำเร็จ", "booking successful", "booking confirmed"))
+                       or ("การจองของคุณ" in ui_labels(root)
+                           and confirmation_matches(root, args.date, number, interval)))
+            if failed:
+                capture(root, "submit-error")
+                raise RuntimeError(f"แอปแจ้งข้อผิดพลาดหลัง Submit: {text}")
+            if success:
+                capture(root, "submit-success")
+                LOGGER.info("จองสำเร็จ: สนาม %d วันที่ %s เวลา %s", number, args.date.isoformat(), interval)
+                dismiss_dialog(root)
+                return
+            if dismiss_dialog(root):
+                LOGGER.info("ปิด dialog หลัง Submit รอตรวจผลการจอง")
+            time.sleep(1)
+        capture(root, "submit-result-unknown")
+        raise RuntimeError("กด Submit แล้ว แต่ยังยืนยันผลไม่ได้ เก็บภาพไว้และไม่กด Submit ซ้ำ")
 
     LOGGER.info("เริ่มสคริปต์: อุปกรณ์=%s, ศูนย์=%s, วันที่=%s, เวลา=18:00–21:00",
                 args.serial, args.center, args.date.isoformat())

@@ -1,8 +1,10 @@
 import unittest
+import struct
 import xml.etree.ElementTree as ET
 from datetime import date
 
-from open_booking import PACKAGE, activity_button, available_slot, ranked_courts, selected_date_matches
+from open_booking import (PACKAGE, activity_button, available_slot, confirmation_matches,
+                         orange_submit_center, ranked_courts, selected_date_matches)
 
 
 def node(**attributes):
@@ -22,6 +24,41 @@ def schedule(*entries):
 
 
 class BookingSelectionTests(unittest.TestCase):
+    def test_confirmation_requires_correct_court_date_and_time(self):
+        root = node()
+        for text in ("Confirm Booking", "13/10/2569", "18:00 น.", "สนามแบดมินตัน 2"):
+            root.append(node(text=text))
+        self.assertTrue(confirmation_matches(root, date(2026, 10, 13), 2, "18:00–19:00"))
+        self.assertFalse(confirmation_matches(root, date(2026, 10, 13), 1, "18:00–19:00"))
+        self.assertFalse(confirmation_matches(root, date(2026, 10, 12), 2, "18:00–19:00"))
+        self.assertFalse(confirmation_matches(root, date(2026, 10, 13), 2, "19:00–20:00"))
+
+    def test_time_selection_screen_is_not_confirmation(self):
+        root = node()
+        for text in ("เลือกจองวัน-เวลา", "13/10/2569", "18:00", "สนามแบดมินตัน 2"):
+            root.append(node(text=text))
+        self.assertFalse(confirmation_matches(root, date(2026, 10, 13), 2, "18:00–19:00"))
+
+    @staticmethod
+    def screen(buttons):
+        width, height = 200, 400
+        pixels = bytearray(bytes((255, 255, 255, 255)) * width * height)
+        for x1, y1, x2, y2 in buttons:
+            for y in range(y1, y2):
+                for x in range(x1, x2):
+                    position = (y * width + x) * 4
+                    pixels[position:position + 4] = bytes((255, 85, 0, 255))
+        return struct.pack("<4I", width, height, 1, 1) + pixels
+
+    def test_orange_button_ignores_orange_header_element(self):
+        self.assertEqual(orange_submit_center(self.screen([(20, 70, 100, 100),
+                                                          (20, 330, 180, 355)])), (100, 342))
+
+    def test_ambiguous_or_missing_orange_button_stops(self):
+        for buttons in ([], [(20, 270, 180, 295), (20, 330, 180, 355)]):
+            with self.assertRaises(RuntimeError):
+                orange_submit_center(self.screen(buttons))
+
     def test_one_hour_only(self):
         root = schedule(("18:00 - 20:00", "ว่าง"), ("18:00 - 18:30", "ว่าง"),
                         ("19:00 - 20:00", "ว่าง"))

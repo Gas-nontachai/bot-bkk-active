@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""เปิด BKK Active แล้วเข้าแท็บจองคิว ผ่าน ADB (ใช้ Python standard library)."""
+"""เปิด BKK Active เข้าจองคิว แล้วกดสร้างการจองใหม่ ผ่าน ADB."""
 
 import argparse
 import os
@@ -94,15 +94,32 @@ def main():
         if dismiss_dialog(root):
             time.sleep(1)
             continue
-        node = booking_tab(root)
-        booking_page = any(item.get("package") == PACKAGE
-                           and item.get("text") == "การจองของคุณ"
-                           for item in root.iter("node"))
-        if booking_page or (node is not None and node.get("selected") == "true"):
-            print("สำเร็จ: เข้าหน้าจองคิวแล้ว")
+        node = next((item for item in root.iter("node")
+                     if item.get("package") == PACKAGE
+                     and "สร้างการจองใหม่" in (item.get("text"), item.get("content-desc"))
+                     and item.get("clickable") == "true"
+                     and item.get("enabled") == "true"), None)
+        if node is not None:
+            print("กด สร้างการจองใหม่…", flush=True)
+            tap(node)
+            break
+        time.sleep(1)
+    else:
+        raise RuntimeError("ไม่พบปุ่มสร้างการจองใหม่ ตรวจหน้าจอแอป")
+
+    deadline = time.monotonic() + 15
+    while time.monotonic() < deadline:
+        root = read_ui()
+        if dismiss_dialog(root):
+            time.sleep(1)
+            continue
+        if any(item.get("package") == PACKAGE
+               and item.get("text") == "เลือกศูนย์กีฬา"
+               for item in root.iter("node")):
+            print("สำเร็จ: เข้าหน้าเลือกศูนย์กีฬาแล้ว")
             return
         time.sleep(1)
-    raise RuntimeError("กดแล้ว แต่ยังยืนยันไม่ได้ว่าเข้าแท็บจองคิวสำเร็จ ตรวจหน้าจอแอป")
+    raise RuntimeError("กดสร้างการจองใหม่แล้ว แต่ยังไม่พบหน้าเลือกศูนย์กีฬา")
 
 
 if __name__ == "__main__":

@@ -1,0 +1,5 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="local.bkkactive.textinput">
+    <uses-sdk android:minSdkVersion="24" android:targetSdkVersion="35" />
+    <application android:label="BKK Active text input" android:debuggable="true" />
+    <instrumentation android:name="local.bkkactive.textinput.TextInput" android:targetPackage="local.bkkactive.textinput" />
+</manifest>

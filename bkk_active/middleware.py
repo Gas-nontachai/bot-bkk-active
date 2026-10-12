@@ -6,7 +6,7 @@ import time
 import xml.etree.ElementTree as ET
 
 from .errors import CenterNotFound
-from .logging_setup import LOGGER
+from .logging_setup import LOGGER, status
 
 
 class CaptureLoggingMiddleware:
@@ -58,6 +58,12 @@ class CaptureLoggingMiddleware:
             self.artifacts.set_step(label)
         started = time.monotonic()
         LOGGER.info("เริ่มขั้นตอน %s", label)
+        if previous == "start" or name == "review":
+            descriptions = {"launch": "เปิดแอป", "booking": "เข้าหน้าจอง",
+                            "center-search": "ค้นหาศูนย์กีฬา", "activity": "เลือกแบดมินตัน",
+                            "court-list": "ตรวจสอบสนามและเวลาว่าง", "submit-booking": "ยืนยันการจอง",
+                            "review": "ส่งรีวิว"}
+            status("กำลัง%s", descriptions.get(name, name))
         self._capture(device, f"{label}-before", force=True)
         try:
             yield

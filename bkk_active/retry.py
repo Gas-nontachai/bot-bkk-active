@@ -1,7 +1,7 @@
 """Restart only when center search reports no results."""
 import time
 from .errors import CenterNotFound
-from .logging_setup import LOGGER
+from .logging_setup import LOGGER, status
 from .run_artifacts import get_run_artifacts
 
 
@@ -15,8 +15,9 @@ def retry_missing_center(action, retries=3):
             return action()
         except CenterNotFound as error:
             if attempt == retries:
-                LOGGER.info("%s: ลองซ้ำครบ %d ครั้งแล้ว จบการทำงาน", error, retries)
+                status("%s: ลองซ้ำครบ %d ครั้งแล้ว จบการทำงาน", error, retries)
                 return
             LOGGER.info("%s: ปิดแอปแล้ว รอ 2 วินาที ก่อนเริ่ม flow ใหม่ (retry %d/%d)",
                         error, attempt + 1, retries)
+            status("ไม่พบศูนย์ กำลังลองใหม่ %d/%d", attempt + 1, retries)
             time.sleep(2)

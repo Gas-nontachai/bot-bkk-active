@@ -2,7 +2,7 @@
 from ..middleware import flow_step
 from ..ui import activity_button
 import time
-from ..logging_setup import LOGGER
+from ..logging_setup import LOGGER, status
 
 
 @flow_step("activity")
@@ -21,6 +21,6 @@ def select_activity(device, config):
             break
         time.sleep(1)
     else:
-        LOGGER.info("ไม่มี สนามแบดมินตัน บนหน้ากิจกรรม จบสคริปต์")
+        status("ไม่มี สนามแบดมินตัน บนหน้ากิจกรรม จบสคริปต์")
         return
     return True

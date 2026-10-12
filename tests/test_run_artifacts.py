@@ -1,5 +1,6 @@
 import json
 import logging
+import io
 from pathlib import Path
 import subprocess
 import tempfile
@@ -12,6 +13,33 @@ from bkk_active.run_artifacts import RunArtifacts
 
 
 class RunArtifactsTests(unittest.TestCase):
+    def test_quiet_terminal_keeps_details_and_traceback_in_file(self):
+        old_handlers, old_level, old_propagate = LOGGER.handlers[:], LOGGER.level, LOGGER.propagate
+        LOGGER.handlers.clear()
+        output = io.StringIO()
+        try:
+            with tempfile.TemporaryDirectory() as parent, patch("sys.stdout", output):
+                path = Path(parent) / "run.log"
+                configure_logging(path)
+                LOGGER.info("ภาพหน้าจอ: example.png")
+                LOGGER.info("กำลังค้นหาศูนย์", extra={"terminal_status": True})
+                try:
+                    raise RuntimeError("test failure")
+                except RuntimeError:
+                    LOGGER.exception("เกิด error")
+                self.assertIn("กำลังค้นหาศูนย์", output.getvalue())
+                self.assertNotIn("example.png", output.getvalue())
+                self.assertNotIn("Traceback", output.getvalue())
+                self.assertIn("example.png", path.read_text())
+                self.assertIn("Traceback", path.read_text())
+        finally:
+            for handler in LOGGER.handlers[:]:
+                LOGGER.removeHandler(handler)
+                handler.close()
+            LOGGER.handlers.extend(old_handlers)
+            LOGGER.setLevel(old_level)
+            LOGGER.propagate = old_propagate
+
     @patch("bkk_active.run_artifacts.subprocess.run")
     def test_screenshots_ui_and_index_share_a_run_folder(self, run):
         run.return_value = subprocess.CompletedProcess([], 0, b"\x89PNG\r\n\x1a\nimage")

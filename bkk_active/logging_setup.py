@@ -7,6 +7,21 @@ from zoneinfo import ZoneInfo
 LOGGER = logging.getLogger("bkk-active")
 
 
+def status(message, *args):
+    LOGGER.info(message, *args, extra={"terminal_status": True})
+
+
+class StatusFilter(logging.Filter):
+    def filter(self, record):
+        return getattr(record, "terminal_status", False) or record.levelno >= logging.ERROR
+
+
+class StatusFormatter(logging.Formatter):
+    def format(self, record):
+        timestamp = datetime.fromtimestamp(record.created, ZoneInfo("Asia/Bangkok"))
+        return f"{timestamp:%H:%M:%S} {record.getMessage()}"
+
+
 class BangkokFormatter(logging.Formatter):
     def formatTime(self, record, datefmt=None):
         return datetime.fromtimestamp(record.created, ZoneInfo("Asia/Bangkok")).strftime(
@@ -14,13 +29,15 @@ class BangkokFormatter(logging.Formatter):
         )
 
 
-def configure_logging(log_file=None):
+def configure_logging(log_file=None, *, verbose=False):
     for existing in LOGGER.handlers[:]:
         LOGGER.removeHandler(existing)
         existing.close()
     formatter = BangkokFormatter("%(asctime)s [%(levelname)s] %(message)s")
     handler = logging.StreamHandler(sys.stdout)
-    handler.setFormatter(formatter)
+    handler.setFormatter(formatter if verbose else StatusFormatter())
+    if not verbose:
+        handler.addFilter(StatusFilter())
     LOGGER.addHandler(handler)
     if log_file is not None:
         file_handler = logging.FileHandler(log_file, encoding="utf-8")

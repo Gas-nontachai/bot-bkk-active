@@ -4,7 +4,7 @@ import re
 from ..ui import activity_button, ui_labels
 from ..policy import ranked_courts
 from .schedule import open_court, find_evening_slot
-from ..logging_setup import LOGGER
+from ..logging_setup import LOGGER, status
 
 
 @flow_step("locate-court")
@@ -86,4 +86,4 @@ def choose_court_slot(device, config):
             return number, slot
         LOGGER.info("สนาม %d เวลา %s ไม่ว่างแล้ว ข้ามไปตัวเลือกถัดไป", number, interval)
         back_to_courts(device, config)
-    LOGGER.info("ไม่มีตัวเลือกที่ยังว่าง 1 ชั่วโมงช่วง 18:00–21:00 วันที่ %s จบสคริปต์", config.date.isoformat())
+    status("ไม่มีเวลาว่าง 1 ชั่วโมงช่วง 18:00–21:00 วันที่ %s จบสคริปต์", config.date.isoformat())

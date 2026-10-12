@@ -7,7 +7,7 @@ from ..errors import CenterNotFound
 from ..ui import bounds
 import time
 from ..config import PACKAGE
-from ..logging_setup import LOGGER
+from ..logging_setup import LOGGER, status
 
 
 @flow_step("center-search")
@@ -91,7 +91,7 @@ def search_center(device, config, root):
         labels = [item.get("text", "") for item in root.iter("node")
                   if item.get("package") == PACKAGE]
         if "ไม่สามารถจองเข้าใช้บริการได้" in labels:
-            LOGGER.info("กดเข้าศูนย์แล้ว แต่แอปแจ้งว่าไม่สามารถจองเข้าใช้บริการได้: ต้องสมัครสมาชิกศูนย์นี้ จบสคริปต์")
+            status("แอปแจ้งว่าต้องสมัครสมาชิกศูนย์นี้ จบรอบการทำงาน")
             return
         if "เลือกกิจกรรม" in labels:
             LOGGER.info("เข้าหน้าเลือกกิจกรรมแล้ว")

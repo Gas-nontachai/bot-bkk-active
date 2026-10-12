@@ -6,6 +6,7 @@
 open_booking.py             # จุดเริ่มรัน CLI
 bkk_active/
   cli.py                    # รับ arguments และเริ่ม retry
+  scheduler.py              # ตั้งเวลา/วันทำงานตามเวลาไทย
   runner.py                 # เรียก flow ตามลำดับ
   config.py                 # package, activity, path และค่าคงที่
   device.py                 # ADB, tap, scroll, wait, screenshot
@@ -84,6 +85,49 @@ middleware บันทึกเริ่ม–จบ ระยะเวลา�
 python3 open_booking.py
 ```
 
+## ปล่อยรันตาม Schedule
+
+ทุกวันเวลา 06:00 ตามเวลาไทย:
+
+```sh
+python3 open_booking.py --schedule 06:00
+```
+
+เฉพาะวันพุธ พฤหัสบดี และศุกร์:
+
+```sh
+python3 open_booking.py --schedule 06:00 --days wed,thu,fri
+```
+
+ใช้ตัวย่อไทยได้เช่นกัน:
+
+```sh
+python3 open_booking.py --schedule 06:00 --days พ,พฤ,ศ
+```
+
+วันอื่นใช้ `mon,tue,wed,thu,fri,sat,sun` หรือ `จ,อ,พ,พฤ,ศ,ส,อา`
+ค่าเริ่มต้นคือทุกวัน โปรแกรมจะรอรอบถัดไปและทำงานต่อเนื่องจนกด **Ctrl+C**
+เปิด terminal, emulator และเครื่องไว้ หากปิดโปรแกรม schedule จะหยุด
+ถ้าต้องการกัน Mac sleep ขณะโปรแกรมเปิด สามารถรันด้วย:
+
+```sh
+caffeinate -i python3 open_booking.py --schedule 06:00 --days wed,thu,fri
+```
+
+แต่ละรอบใช้วันที่ทำงานจริงตาม `Asia/Bangkok` และสร้าง `logger/<timestamp>/` ใหม่
+รอบที่ทำงานอยู่จะไม่ซ้อนกัน หากเกิด error จะเก็บรายละเอียดแล้วรอรอบถัดไป
+หากเริ่มโปรแกรมหลังเวลาที่ตั้ง จะรอวันถัดไปที่เลือกไว้
+หากเครื่องตื่นช้ากว่าเวลารอบเกิน 5 นาที จะข้ามรอบนั้น โดยไม่ทำย้อนหลัง
+โหมด schedule ใช้ร่วมกับ `--date` ไม่ได้
+
+terminal แสดงเฉพาะสถานะ เช่น รอรอบถัดไป กำลังค้นหาศูนย์ กำลังจอง และจบรอบ
+log ละเอียดทั้งหมดรวม traceback และภาพยังอยู่ใน `logger/`
+เพิ่ม `--verbose` เพื่อดู log ละเอียดใน terminal ด้วย
+
+```sh
+python3 open_booking.py --schedule 06:00 --verbose
+```
+
 ค่าเริ่มต้นคือ `emulator-5554` หากใช้อุปกรณ์อื่น:
 
 ```sh
@@ -93,11 +137,11 @@ python3 open_booking.py --serial emulator-5556
 เปลี่ยนชื่อศูนย์ที่ค้นหาด้วย `--center "ชื่อศูนย์กีฬา"`
 ค่าเริ่มต้นใช้วันที่รันในเขต `Asia/Bangkok` เปลี่ยนวันที่ด้วย `--date YYYY-MM-DD`
 วันที่ต้องมีปุ่มบนแถบวันที่ และสคริปต์ต้องอ่านวัน/เดือนที่เลือกได้ก่อนเลือกเวลา
-ทุกขั้นตอนแสดง INFO log พร้อมวันที่และเวลาเขต `Asia/Bangkok` (+0700)
-บันทึก log ลงไฟล์ได้ด้วย:
+ทุกขั้นตอนบันทึก INFO log พร้อมวันที่และเวลาเขต `Asia/Bangkok` (+0700) ลง `run.log` อัตโนมัติ
+หากต้องการสำเนา log ละเอียดอีกไฟล์:
 
 ```sh
-python3 open_booking.py | tee booking.log
+python3 open_booking.py --verbose | tee booking.log
 ```
 
 สคริปต์หา `adb` จาก PATH หรือ `~/Library/Android/sdk/platform-tools/adb`

@@ -9,7 +9,7 @@ from .flows.courts import CourtProgress, choose_court_slot
 from .flows.submit import select_slot
 from .logging_setup import status
 from .config import PACKAGE
-from .errors import AppBusy
+from .errors import AppBusy, SlotSelectionBusy
 
 
 def enter_courts(device, config):
@@ -32,6 +32,7 @@ def run_flow(config):
         status("ตรวจเวลาว่างวันที่ %s", target.isoformat())
         restarts, reopen = 0, not entered
         while True:
+            selecting_slot = False
             try:
                 if reopen:
                     outcome = enter_courts(device, booking)
@@ -40,8 +41,15 @@ def run_flow(config):
                     entered = True
                     reopen = False
                 choice = choose_court_slot(device, booking)
+                if choice is not None:
+                    number, slot = choice
+                    selecting_slot = True
+                    select_slot(device, booking, number, slot)
+                    return "completed"
                 break
-            except AppBusy:
+            except AppBusy as error:
+                if selecting_slot and not isinstance(error, SlotSelectionBusy):
+                    raise
                 if restarts >= 3:
                     raise RuntimeError("พบหน้ารอซ้ำหลังเปิดแอปใหม่ครบ 3 ครั้ง จบรอบ")
                 restarts += 1
@@ -50,8 +58,4 @@ def run_flow(config):
                 device.run("shell", "am", "force-stop", PACKAGE)
                 entered = False
                 reopen = True
-        if choice is not None:
-            number, slot = choice
-            select_slot(device, booking, number, slot)
-            return "completed"
     return "no_available_slot"

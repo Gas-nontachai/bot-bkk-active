@@ -1,17 +1,15 @@
-"""Compare courts and return one app-defined slot closest to 18:00."""
-from dataclasses import dataclass, field
+"""Inspect courts in order and return the first available slot."""
+from dataclasses import dataclass
 from ..middleware import flow_step
 from ..ui import back_button, court_button, is_court_list, ui_labels
-from ..policy import ranked_courts
-from .schedule import open_court, find_evening_slot
+from .schedule import open_court, find_available_slot
 from ..logging_setup import LOGGER, status
+from ..policy import time_window_label
 
 
 @dataclass
 class CourtProgress:
     next_court: int = 1
-    candidates: list = field(default_factory=list)
-    ranked_index: int = 0
 
 
 @flow_step("locate-court")
@@ -75,35 +73,15 @@ def choose_court_slot(device, config):
             progress.next_court = number + 1
             continue
         root = open_court(device, config, number, court)
-        LOGGER.info("ตรวจ %s: เลือก 1 ช่องที่ว่าง ภายใน 18:00–21:00", name)
-        slot = find_evening_slot(device, config, root)
+        LOGGER.info("ตรวจ %s: เลือกช่องว่างแรกที่พบ %s", name, time_window_label(config))
+        slot = find_available_slot(device, config, root)
         if slot is not None:
             _, interval = slot
-            LOGGER.info("พบตัวเลือก: %s เวลา %s", name, interval)
-            if interval.startswith("18:00–"):
-                LOGGER.info("พบเวลาเริ่ม 18:00 ตรงเป้าหมาย เลือกทันที")
-                return number, slot
-            progress.candidates.append((number, interval))
-            LOGGER.info("เก็บตัวเลือกไว้ แล้วตรวจสนามอื่นเพื่อหาเวลาที่ใกล้ 18:00 กว่า")
+            LOGGER.info("พบช่องว่าง: %s เวลา %s เลือกทันที", name, interval)
+            return number, slot
         else:
-            LOGGER.info("ไม่มีช่องว่างช่วง 18:00–21:00 ที่ %s", name)
+            LOGGER.info("ไม่มีช่องว่าง %s ที่ %s", time_window_label(config), name)
         progress.next_court = number + 1
         back_to_courts(device, config)
 
-    candidates = ranked_courts(progress.candidates)
-    for index in range(progress.ranked_index, len(candidates)):
-        number, interval = candidates[index]
-        LOGGER.info("ตรวจตัวเลือกที่ใกล้ 18:00 ที่สุดอีกครั้ง: สนาม %d เวลา %s", number, interval)
-        court = locate_court(device, config, number, from_top=True)
-        if court is None:
-            LOGGER.info("สนาม %d หายจากรายการ ข้ามตัวเลือก", number)
-            progress.ranked_index = index + 1
-            continue
-        root = open_court(device, config, number, court)
-        slot = find_evening_slot(device, config, root, exact_interval=interval)
-        if slot is not None:
-            return number, slot
-        LOGGER.info("สนาม %d เวลา %s ไม่ว่างแล้ว ข้ามไปตัวเลือกถัดไป", number, interval)
-        progress.ranked_index = index + 1
-        back_to_courts(device, config)
-    status("ไม่มีช่องว่างช่วง 18:00–21:00 วันที่ %s จบสคริปต์", config.date.isoformat())
+    status("ไม่มีช่องว่าง %s วันที่ %s จบการตรวจวันนี้", time_window_label(config), config.date.isoformat())

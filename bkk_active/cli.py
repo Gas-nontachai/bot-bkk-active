@@ -2,12 +2,24 @@
 import argparse
 from datetime import date, datetime, timedelta
 from copy import copy
+from contextlib import nullcontext
 from zoneinfo import ZoneInfo
 from .retry import retry_missing_center
 from .runner import run_flow
 from .logging_setup import LOGGER, configure_logging, status
 from .run_artifacts import RunArtifacts, set_run_artifacts
 from .scheduler import parse_time, parse_days, run_schedule
+from .api_capture import ApiCapture
+
+
+def parse_booking_time(value):
+    if value == "24:00":
+        return 24 * 60
+    try:
+        parsed = parse_time(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError(str(error)) from error
+    return parsed.hour * 60 + parsed.minute
 
 
 def main():
@@ -18,6 +30,10 @@ def main():
                         help="วันที่จอง YYYY-MM-DD ต้องเป็นวันนี้หรือพรุ่งนี้ตามเวลาไทย")
     parser.add_argument("--booking-day", choices=("today", "tomorrow", "both"),
                         help="เลือก today/tomorrow หรือ both: ลองวันนี้ก่อนแล้วพรุ่งนี้ (ค่าเริ่มต้น: both)")
+    parser.add_argument("--start-time", type=parse_booking_time, dest="start_minute", default=0,
+                        metavar="HH:MM", help="เวลาเริ่มเร็วที่สุดที่ต้องการ (ค่าเริ่มต้น: 00:00)")
+    parser.add_argument("--end-time", type=parse_booking_time, dest="end_minute", default=24 * 60,
+                        metavar="HH:MM", help="เวลาจบช้าที่สุดที่ต้องการ (ค่าเริ่มต้น: 24:00)")
     parser.add_argument("--schedule", type=parse_time, metavar="HH:MM",
                         help="ปล่อยรันทุกวันตามเวลาไทย เช่น 06:00")
     parser.add_argument("--days", type=parse_days, metavar="DAYS",
@@ -27,7 +43,19 @@ def main():
                         help="เก็บภาพทุกขั้นตอนแบบละเอียด (ค่าเริ่มต้น: โหมดเร็ว)")
     parser.add_argument("--ui-backend", choices=("bridge", "uiautomator"), default="bridge",
                         help="วิธีอ่านหน้าจอ (ค่าเริ่มต้น: Android bridge แบบเร็ว)")
+    parser.add_argument("--capture-api", action="store_true", help="จับ HTTP/HTTPS ผ่าน mitmproxy")
+    parser.add_argument("--api-port", type=int, default=8080, help="พอร์ต proxy บนเครื่อง (ค่าเริ่มต้น: 8080)")
+    parser.add_argument("--api-host", action="append", help="เก็บเฉพาะ hostname นี้ ระบุซ้ำได้")
+    parser.add_argument("--api-bodies", action="store_true", help="เก็บ JSON body พร้อมปิดบังข้อมูลสำคัญ")
     args = parser.parse_args()
+    if args.start_minute >= args.end_minute:
+        parser.error("--start-time ต้องก่อน --end-time และช่วงเวลาต้องอยู่ภายในวันเดียวกัน")
+    if not 1 <= args.api_port <= 65535:
+        parser.error("--api-port ต้องอยู่ระหว่าง 1–65535")
+    if (args.api_host or args.api_bodies) and not args.capture_api:
+        parser.error("--api-host และ --api-bodies ต้องใช้ร่วมกับ --capture-api")
+    if args.api_bodies and not args.api_host:
+        parser.error("--api-bodies ต้องระบุ --api-host เพื่อจำกัด body ให้เฉพาะ API ที่ต้องการ")
     if args.days is not None and args.schedule is None:
         parser.error("--days ต้องใช้ร่วมกับ --schedule")
     if args.schedule is not None and args.date is not None:
@@ -63,7 +91,9 @@ def execute_run(args, day):
            ", ".join(target.isoformat() for target in config.booking_dates))
     outcome = "interrupted"
     try:
-        result = retry_missing_center(lambda: run_flow(config), retries=3)
+        capture = ApiCapture(artifacts, config) if getattr(args, "capture_api", False) else nullcontext()
+        with capture:
+            result = retry_missing_center(lambda: run_flow(config), retries=3)
         outcome = str(result or "finished")
         status("จบรอบ — log: logger/%s/", artifacts.folder.name)
         return result

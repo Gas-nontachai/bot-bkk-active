@@ -1,10 +1,21 @@
-"""App-defined available slots and court ranking near 18:00."""
+"""Select the first app-defined available slot in UI order."""
 import re
 from .config import PACKAGE, TIME_RANGE
 from .ui import bounds, ui_labels
 
 
-def available_slot(root, start_minute=18 * 60, end_minute=21 * 60, exact_interval=None):
+def time_window(config):
+    return getattr(config, "start_minute", 0), getattr(config, "end_minute", 24 * 60)
+
+
+def time_window_label(config):
+    begin, end = time_window(config)
+    if (begin, end) == (0, 24 * 60):
+        return "ทุกช่วงเวลา"
+    return f"{begin // 60:02d}:{begin % 60:02d}–{end // 60:02d}:{end % 60:02d}"
+
+
+def available_slot(root, start_minute=0, end_minute=24 * 60, exact_interval=None):
     """อ่านสถานะในแถวเดียวกับเวลา ไม่ตีความ 'ไม่ว่าง' ว่าเป็น 'ว่าง'."""
     choices = []
     for node in root.iter("node"):
@@ -36,10 +47,5 @@ def available_slot(root, start_minute=18 * 60, end_minute=21 * 60, exact_interva
         choices = [choice for choice in choices if choice[3] == exact_interval]
     if not choices:
         return None
-    _, _, node, label = min(choices, key=lambda choice: (choice[0], choice[1]))
+    _, _, node, label = choices[0]
     return node, label
-
-
-def ranked_courts(choices):
-    """เรียงเวลาเริ่มใกล้ 18:00 ที่สุดก่อน แล้วใช้หมายเลขสนามตัดสินเมื่อเวลาเท่ากัน."""
-    return sorted(choices, key=lambda choice: (int(choice[1][:2]) * 60 + int(choice[1][3:5]), choice[0]))

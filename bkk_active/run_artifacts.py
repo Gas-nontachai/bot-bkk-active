@@ -43,9 +43,32 @@ class RunArtifacts:
         self.last_ui = None
         self.capture_mode = capture_mode
         self.metrics = RunMetrics()
+        self.api_context_file = None
+        self.api_context = {"step": "start", "attempt": 1, "booking_date": None,
+                            "court": None, "serial": None}
+
+    def publish_api_context(self):
+        if self.api_context_file is None:
+            return
+        self.api_context.update(step=self.step, attempt=self.attempt)
+        temporary = self.api_context_file.with_suffix(".tmp")
+        temporary.write_text(json.dumps(self.api_context, ensure_ascii=False), encoding="utf-8")
+        temporary.replace(self.api_context_file)
+
+    def set_api_context(self, config, number=None):
+        if self.api_context_file is None:
+            return
+        target = config.date.isoformat()
+        if target != self.api_context["booking_date"]:
+            self.api_context["court"] = None
+        self.api_context.update(booking_date=target, serial=config.serial)
+        if number is not None:
+            self.api_context["court"] = number
+        self.publish_api_context()
 
     def set_step(self, label):
         self.step = label
+        self.publish_api_context()
         LOGGER.info("ขั้นตอน: %s", label)
 
     def capture(self, adb, serial, root, label=None, force=False):

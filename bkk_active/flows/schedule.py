@@ -1,8 +1,8 @@
-"""Select the date and inspect available evening slots."""
+"""Select the date and inspect all available slots."""
 from ..middleware import flow_step
 from ..config import TIME_RANGE
 from ..ui import activity_button, selected_date_matches, ui_labels
-from ..policy import available_slot
+from ..policy import available_slot, time_window, time_window_label
 from ..logging_setup import LOGGER
 
 
@@ -20,11 +20,13 @@ def choose_date(device, config, root):
     return root
 
 
-@flow_step("find-evening-time")
-def find_evening_slot(device, config, root, exact_interval=None):
+@flow_step("find-available-time")
+def find_available_slot(device, config, root, exact_interval=None):
+    start_minute, end_minute = time_window(config)
     previous, unchanged = None, 0
     for attempt in range(41):
-        slot = available_slot(root, exact_interval=exact_interval)
+        slot = available_slot(root, start_minute=start_minute, end_minute=end_minute,
+                              exact_interval=exact_interval)
         if slot is not None:
             return slot
         current = device.signature(root)
@@ -32,7 +34,7 @@ def find_evening_slot(device, config, root, exact_interval=None):
         if unchanged >= 2 or not device.scroll_down(root):
             return None
         previous = current
-        LOGGER.info("เลื่อนหาเวลาว่าง 18:00–21:00 ครั้งที่ %d", attempt + 1)
+        LOGGER.info("เลื่อนหาช่องว่าง %s ครั้งที่ %d", time_window_label(config), attempt + 1)
         root = device.read_ui()
     raise RuntimeError("เลื่อนหน้าเวลาครบ 40 ครั้ง แต่ยังไม่ถึงท้ายรายการ")
 

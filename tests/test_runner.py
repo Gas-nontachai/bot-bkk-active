@@ -128,18 +128,18 @@ class RunnerTests(unittest.TestCase):
         choose.assert_called_once()
         submit.assert_called_once()
 
-    def test_later_court_at_18_wins_over_first_court_at_20(self):
+    def test_first_free_court_is_selected_without_comparing_other_times(self):
         device = Mock()
         config = SimpleNamespace()
         later = (object(), "20:00–21:00")
         preferred = (object(), "18:00–19:00")
         with patch("bkk_active.flows.courts.locate_court", return_value=object()), \
                 patch("bkk_active.flows.courts.open_court"), \
-                patch("bkk_active.flows.courts.find_evening_slot", side_effect=[later, preferred]), \
+                patch("bkk_active.flows.courts.find_available_slot", side_effect=[later, preferred]), \
                 patch("bkk_active.flows.courts.back_to_courts") as back:
             choice = choose_court_slot(device, config)
-        self.assertEqual(choice, (2, preferred))
-        self.assertEqual(back.call_count, 1)
+        self.assertEqual(choice, (1, later))
+        back.assert_not_called()
 
     def test_app_slot_starting_at_18_is_selected_without_fixed_end_time(self):
         device = Mock()
@@ -147,7 +147,7 @@ class RunnerTests(unittest.TestCase):
         slot = (object(), "18:00–19:10")
         with patch("bkk_active.flows.courts.locate_court", return_value=object()), \
                 patch("bkk_active.flows.courts.open_court"), \
-                patch("bkk_active.flows.courts.find_evening_slot", return_value=slot) as find, \
+                patch("bkk_active.flows.courts.find_available_slot", return_value=slot) as find, \
                 patch("bkk_active.flows.courts.back_to_courts") as back:
             choice = choose_court_slot(device, config)
         self.assertEqual(choice, (1, slot))

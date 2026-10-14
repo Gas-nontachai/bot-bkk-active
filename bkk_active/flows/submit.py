@@ -6,6 +6,7 @@ from .review import submit_review
 from .payment import defer_payment
 import time
 from ..logging_setup import LOGGER
+from ..errors import AppBusy, SlotSelectionBusy
 
 
 @flow_step("submit-booking")
@@ -15,8 +16,11 @@ def select_slot(device, config, number, slot):
                 number, config.date.isoformat(), interval)
     device.tap(node)
     LOGGER.info("รอหน้ายืนยันการจอง")
-    root = device.wait_for(lambda ui: confirmation_matches(ui, config.date, number, interval),
-                    "ไม่พบหน้ายืนยันที่วัน สนาม และเวลาตรงกับตัวเลือก จึงไม่ได้กด Submit")
+    try:
+        root = device.wait_for(lambda ui: confirmation_matches(ui, config.date, number, interval),
+                        "ไม่พบหน้ายืนยันที่วัน สนาม และเวลาตรงกับตัวเลือก จึงไม่ได้กด Submit")
+    except AppBusy as error:
+        raise SlotSelectionBusy("พบหน้ารอก่อนเปิดหน้ายืนยัน ยังไม่ได้กด Submit") from error
     LOGGER.info("ตรวจข้อมูลยืนยันตรงกัน: วันที่=%s สนาม=%d เวลา=%s",
                 config.date.isoformat(), number, interval)
     raw = device.screenshot_raw()

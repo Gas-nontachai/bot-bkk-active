@@ -7,7 +7,8 @@ import xml.etree.ElementTree as ET
 
 from bkk_active.config import PACKAGE
 from bkk_active.device import AndroidDevice
-from bkk_active.errors import AppBusy
+from bkk_active.errors import AppBusy, SlotSelectionBusy
+from bkk_active.flows.submit import select_slot
 from bkk_active.middleware import CaptureLoggingMiddleware
 from bkk_active.runner import run_flow
 from bkk_active.ui import is_busy_screen
@@ -22,6 +23,30 @@ def busy_screen():
 
 
 class RecoveryTests(unittest.TestCase):
+    def test_busy_opening_confirmation_is_retryable_before_submit(self):
+        device = Mock()
+        device.wait_for.side_effect = AppBusy('busy')
+        config = SimpleNamespace(date=date(2026, 10, 14))
+        with self.assertRaises(SlotSelectionBusy):
+            select_slot(device, config, 1, (object(), '11:00–12:00'))
+        device.run.assert_not_called()
+        device.screenshot_raw.assert_not_called()
+
+    def test_busy_before_confirmation_resumes_the_same_court(self):
+        config = SimpleNamespace(serial='test', date=date(2026, 10, 14))
+        opened = []
+        slot = (object(), '11:00–12:00')
+        with ExitStack() as stack:
+            device, launch, _, submit = self.setup_flow(stack, config)
+            stack.enter_context(patch('bkk_active.flows.courts.open_court',
+                                     side_effect=lambda device, booking, number, court: opened.append(number)))
+            stack.enter_context(patch('bkk_active.flows.courts.find_available_slot', return_value=slot))
+            submit.side_effect = [SlotSelectionBusy('before Submit'), None]
+            self.assertEqual(run_flow(config), 'completed')
+            self.assertEqual(opened, [1, 1])
+            device.run.assert_called_once_with('shell', 'am', 'force-stop', PACKAGE)
+            self.assertEqual(launch.call_count, 2)
+
     def test_blocking_message_is_distinct_from_empty_schedule(self):
         self.assertTrue(is_busy_screen(busy_screen()))
         for text in ("ไม่พบข้อมูล", "กรุณารอสักครู่", "เลือกจองวัน-เวลา"):
@@ -61,7 +86,7 @@ class RecoveryTests(unittest.TestCase):
         submit = stack.enter_context(patch("bkk_active.runner.select_slot"))
         return device, launch, back, submit
 
-    def test_restart_resumes_failed_court_and_keeps_earlier_candidate(self):
+    def test_restart_resumes_failed_court_and_selects_first_free_slot(self):
         config = SimpleNamespace(serial="test", date=date(2026, 10, 14))
         opened = []
         later = (object(), "20:00–21:00")
@@ -73,18 +98,18 @@ class RecoveryTests(unittest.TestCase):
             return number
 
         def find_slot(device, booking, root, exact_interval=None):
-            return later if root == 1 else None
+            return later if root == 3 else None
 
         with ExitStack() as stack:
             device, launch, _, submit = self.setup_flow(stack, config)
             stack.enter_context(patch("bkk_active.flows.courts.open_court", side_effect=open_court))
-            stack.enter_context(patch("bkk_active.flows.courts.find_evening_slot", side_effect=find_slot))
+            stack.enter_context(patch("bkk_active.flows.courts.find_available_slot", side_effect=find_slot))
             self.assertEqual(run_flow(config), "completed")
-            self.assertEqual(opened, [1, 2, 3, 3, 4, 5, 6, 7, 1])
+            self.assertEqual(opened, [1, 2, 3, 3])
             device.run.assert_called_once_with("shell", "am", "force-stop", PACKAGE)
             self.assertEqual(launch.call_count, 2)
             submit.assert_called_once()
-            self.assertEqual(submit.call_args.args[2:], (1, later))
+            self.assertEqual(submit.call_args.args[2:], (3, later))
 
     def test_busy_return_navigation_resumes_next_court(self):
         config = SimpleNamespace(serial="test", date=date(2026, 10, 14))
@@ -94,33 +119,9 @@ class RecoveryTests(unittest.TestCase):
             back.side_effect = [AppBusy("busy")] + [None] * 6
             stack.enter_context(patch("bkk_active.flows.courts.open_court",
                                      side_effect=lambda device, booking, number, court: opened.append(number)))
-            stack.enter_context(patch("bkk_active.flows.courts.find_evening_slot", return_value=None))
+            stack.enter_context(patch("bkk_active.flows.courts.find_available_slot", return_value=None))
             self.assertEqual(run_flow(config), "no_available_slot")
             self.assertEqual(opened, list(range(1, 8)))
-
-    def test_busy_rechecking_candidate_resumes_same_candidate(self):
-        config = SimpleNamespace(serial="test", date=date(2026, 10, 14))
-        later = (object(), "20:00–21:00")
-        opened = []
-        failed = False
-
-        def open_court(device, booking, number, court):
-            nonlocal failed
-            opened.append(number)
-            if booking.court_progress.next_court == 8 and not failed:
-                failed = True
-                raise AppBusy("busy ranking")
-            return number
-
-        with ExitStack() as stack:
-            _, _, _, submit = self.setup_flow(stack, config)
-            stack.enter_context(patch("bkk_active.flows.courts.open_court", side_effect=open_court))
-            stack.enter_context(patch("bkk_active.flows.courts.find_evening_slot",
-                                     side_effect=lambda device, booking, root, exact_interval=None:
-                                     later if root == 1 else None))
-            self.assertEqual(run_flow(config), "completed")
-            self.assertEqual(opened, list(range(1, 8)) + [1, 1])
-            submit.assert_called_once()
 
     def test_busy_initial_navigation_can_restart(self):
         config = SimpleNamespace(serial="test", date=date(2026, 10, 14))
@@ -145,7 +146,7 @@ class RecoveryTests(unittest.TestCase):
         with ExitStack() as stack:
             device, launch, _, submit = self.setup_flow(stack, config)
             stack.enter_context(patch("bkk_active.flows.courts.open_court", side_effect=open_court))
-            stack.enter_context(patch("bkk_active.flows.courts.find_evening_slot", return_value=None))
+            stack.enter_context(patch("bkk_active.flows.courts.find_available_slot", return_value=None))
             with self.assertRaisesRegex(RuntimeError, "ครบ 3 ครั้ง"):
                 run_flow(config)
             self.assertEqual(opened, [(today, n) for n in range(1, 8)] + [(tomorrow, 1)] * 4)

@@ -1,6 +1,7 @@
 """Capture and log flow boundaries, UI changes, actions, and errors."""
 from contextlib import contextmanager
 from functools import wraps
+from inspect import signature
 import subprocess
 import time
 import xml.etree.ElementTree as ET
@@ -108,16 +109,23 @@ class CaptureLoggingMiddleware:
             self.current_step = previous
             if self.artifacts is not None:
                 self.artifacts.step = previous
+                self.artifacts.publish_api_context()
 
 
 def flow_step(name):
     """Decorate a flow without changing its result or retry/submit behavior."""
     def decorate(function):
+        parameters = signature(function)
         @wraps(function)
         def wrapped(device, *args, **kwargs):
             middleware = getattr(device, "middleware", None)
             if not isinstance(middleware, CaptureLoggingMiddleware):
                 return function(device, *args, **kwargs)
+            if middleware.artifacts is not None:
+                arguments = parameters.bind(device, *args, **kwargs).arguments
+                config = arguments.get("config")
+                if config is not None:
+                    middleware.artifacts.set_api_context(config, arguments.get("number"))
             label = name(device, *args, **kwargs) if callable(name) else name
             with middleware.step(device, label):
                 return function(device, *args, **kwargs)

@@ -3,12 +3,13 @@ from ..middleware import flow_step
 from ..config import ACTIVITY
 from ..config import PACKAGE
 from ..logging_setup import LOGGER
+from ..policy import time_window_label
 
 
 @flow_step("launch")
 def launch(device, config):
-    LOGGER.info("เริ่มสคริปต์: อุปกรณ์=%s, ศูนย์=%s, วันที่=%s, เวลา=18:00–21:00",
-                config.serial, config.center, config.date.isoformat())
+    LOGGER.info("เริ่มสคริปต์: อุปกรณ์=%s, ศูนย์=%s, วันที่=%s, เลือกช่องว่างแรก %s",
+                config.serial, config.center, config.date.isoformat(), time_window_label(config))
     if device.run("get-state").strip() != "device":
         raise RuntimeError(f"อุปกรณ์ {config.serial} ยังไม่พร้อม")
     if not device.run("shell", "pm", "path", PACKAGE).strip().startswith("package:"):

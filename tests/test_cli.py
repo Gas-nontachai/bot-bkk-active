@@ -9,6 +9,34 @@ from bkk_active.cli import execute_run, main
 
 
 class CliTests(unittest.TestCase):
+    def test_booking_time_window_defaults_and_custom_bounds(self):
+        for options, expected in (([], (0, 1440)),
+                                  (["--start-time", "18:00", "--end-time", "21:00"], (1080, 1260)),
+                                  (["--start-time", "18:20"], (1100, 1440)),
+                                  (["--end-time", "10:30"], (0, 630)),
+                                  (["--end-time", "24:00"], (0, 1440))):
+            with self.subTest(options=options), \
+                    patch("sys.argv", ["open_booking.py"] + options), \
+                    patch("bkk_active.cli.configure_logging"), \
+                    patch("bkk_active.cli.execute_run") as execute:
+                main()
+                config = execute.call_args.args[0]
+                self.assertEqual((config.start_minute, config.end_minute), expected)
+
+    def test_invalid_or_overnight_booking_windows_are_rejected(self):
+        for options in (["--start-time", "24:00"], ["--end-time", "24:01"],
+                        ["--start-time", "18:60"], ["--start-time", "18"],
+                        ["--start-time", "21:00", "--end-time", "18:00"],
+                        ["--start-time", "18:00", "--end-time", "18:00"]):
+            with self.subTest(options=options), \
+                    patch("sys.argv", ["open_booking.py"] + options), \
+                    patch("sys.stderr", io.StringIO()), \
+                    patch("bkk_active.cli.execute_run") as execute:
+                with self.assertRaises(SystemExit) as error:
+                    main()
+                self.assertEqual(error.exception.code, 2)
+                execute.assert_not_called()
+
     def test_booking_day_modes_and_explicit_date(self):
         today, tomorrow = date(2026, 12, 31), date(2027, 1, 1)
         for mode, explicit, expected in ((None, None, (today, tomorrow)),

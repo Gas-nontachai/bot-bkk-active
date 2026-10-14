@@ -3,15 +3,16 @@ import struct
 from unittest.mock import Mock, patch
 import xml.etree.ElementTree as ET
 from datetime import date
+from types import SimpleNamespace
 
 from bkk_active.config import PACKAGE
 from bkk_active.errors import CenterNotFound
 from bkk_active.ui import (activity_button, confirmation_matches, court_button,
                            is_court_list, is_review_page, selected_date_matches)
-from bkk_active.policy import available_slot, ranked_courts
+from bkk_active.policy import available_slot
 from bkk_active.retry import retry_missing_center
 from bkk_active.vision import orange_submit_center
-from bkk_active.flows.schedule import choose_date
+from bkk_active.flows.schedule import choose_date, find_available_slot
 
 
 def node(**attributes):
@@ -31,6 +32,27 @@ def schedule(*entries):
 
 
 class BookingSelectionTests(unittest.TestCase):
+    def test_time_scan_skips_free_slots_outside_configured_window(self):
+        root = schedule(("11:00 - 12:00", "ว่าง"), ("17:30 - 18:30", "ว่าง"),
+                        ("18:20 - 19:30", "ว่าง"), ("20:00 - 21:00", "ว่าง"))
+        config = SimpleNamespace(start_minute=18 * 60, end_minute=21 * 60)
+        device = Mock()
+        selected, interval = find_available_slot(device, config, root)
+        self.assertIs(selected, root[2])
+        self.assertEqual(interval, "18:20–19:30")
+        device.scroll_down.assert_not_called()
+
+    def test_time_window_accepts_exact_boundaries_and_rejects_overrun(self):
+        config = SimpleNamespace(start_minute=18 * 60, end_minute=21 * 60)
+        for interval, expected in (("18:00 - 19:00", "18:00–19:00"),
+                                   ("20:00 - 21:00", "20:00–21:00"),
+                                   ("20:30 - 21:30", None)):
+            with self.subTest(interval=interval):
+                device = Mock()
+                device.scroll_down.return_value = False
+                result = find_available_slot(device, config, schedule((interval, "ว่าง")))
+                self.assertEqual(result[1] if result else None, expected)
+
     def test_choose_tomorrow_taps_day_and_waits_for_selected_date(self):
         root = node()
         tomorrow = node(clickable="true", **{"content-desc": "15, พฤ."})
@@ -86,12 +108,8 @@ class BookingSelectionTests(unittest.TestCase):
         self.assertFalse(confirmation_matches(root, date(2026, 10, 14), 1, "18:00–19:00"))
 
     def test_slots_can_start_at_nonzero_minutes(self):
-        root = schedule(("19:00 - 20:00", "ว่าง"), ("18:20 - 19:20", "ว่าง"))
+        root = schedule(("18:20 - 19:20", "ว่าง"), ("19:00 - 20:00", "ว่าง"))
         self.assertEqual(available_slot(root)[1], "18:20–19:20")
-
-    def test_court_ranking_compares_minutes_not_only_hours(self):
-        self.assertEqual(ranked_courts([(1, "18:40–19:40"), (2, "18:20–19:20")])[0],
-                         (2, "18:20–19:20"))
 
     @patch("bkk_active.retry.time.sleep")
     def test_missing_center_retries_three_times_after_first_attempt(self, sleep):
@@ -169,32 +187,32 @@ class BookingSelectionTests(unittest.TestCase):
                 orange_submit_center(self.screen(buttons))
 
     def test_app_defined_slot_can_last_seventy_minutes(self):
-        root = schedule(("19:00 - 20:00", "ว่าง"), ("18:20 - 19:30", "ว่าง"))
+        root = schedule(("18:20 - 19:30", "ว่าง"), ("19:00 - 20:00", "ว่าง"))
         self.assertEqual(available_slot(root)[1], "18:20–19:30")
 
-    def test_global_ranking_prefers_earlier_time_on_later_court(self):
-        self.assertEqual(ranked_courts([(1, "20:00–21:00"), (3, "19:00–20:00"),
-                                       (7, "18:00–19:00")])[0], (7, "18:00–19:00"))
+    def test_late_slot_is_allowed_without_a_time_window(self):
+        root = schedule(("21:00 - 21:30", "ว่าง"))
+        self.assertEqual(available_slot(root)[1], "21:00–21:30")
 
     def test_recheck_requires_original_time_to_still_be_free(self):
         root = schedule(("19:00 - 20:00", "ไม่ว่าง"), ("20:00 - 21:00", "ว่าง"))
         self.assertIsNone(available_slot(root, exact_interval="19:00–20:00"))
 
-    def test_busy_and_morning_slots_are_not_selected(self):
+    def test_morning_slot_is_selected_and_busy_slot_is_skipped(self):
         root = schedule(("5:00 - 6:00", "ว่าง"), ("18:00 - 19:00", "ไม่ว่าง"),
                         ("19:00 - 20:00", "ว่าง"))
         selected, interval = available_slot(root)
-        self.assertIs(selected, root[2])
-        self.assertEqual(interval, "19:00–20:00")
+        self.assertIs(selected, root[0])
+        self.assertEqual(interval, "05:00–06:00")
 
     def test_interval_must_fit_fully_within_evening_window(self):
         root = schedule(("17:30 - 18:30", "ว่าง"), ("20:30 - 21:30", "ว่าง"),
                         ("21:00 - 22:00", "ว่าง"))
-        self.assertIsNone(available_slot(root))
+        self.assertIsNone(available_slot(root, start_minute=18 * 60, end_minute=21 * 60))
 
-    def test_end_at_21_is_allowed_and_earliest_free_slot_wins(self):
+    def test_first_visible_free_slot_wins(self):
         root = schedule(("20:00 – 21:00", "ว่าง"), ("18:00 - 19:00", "ว่าง"))
-        self.assertEqual(available_slot(root)[1], "18:00–19:00")
+        self.assertEqual(available_slot(root)[1], "20:00–21:00")
 
     def test_busy_label_in_same_row_overrides_free_label(self):
         root = schedule(("18:00 - 19:00", "ว่าง"))

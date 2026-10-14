@@ -16,8 +16,8 @@ def main():
     parser.add_argument("--center", default="ศูนย์กีฬาเบญจกิติ", help="ชื่อศูนย์กีฬาที่จะค้นหา")
     parser.add_argument("--date", type=date.fromisoformat,
                         help="วันที่จอง YYYY-MM-DD ต้องเป็นวันนี้หรือพรุ่งนี้ตามเวลาไทย")
-    parser.add_argument("--booking-day", choices=("today", "tomorrow"),
-                        help="จองวันนี้หรือพรุ่งนี้ (ค่าเริ่มต้น: today)")
+    parser.add_argument("--booking-day", choices=("today", "tomorrow", "both"),
+                        help="เลือก today/tomorrow หรือ both: ลองวันนี้ก่อนแล้วพรุ่งนี้ (ค่าเริ่มต้น: both)")
     parser.add_argument("--schedule", type=parse_time, metavar="HH:MM",
                         help="ปล่อยรันทุกวันตามเวลาไทย เช่น 06:00")
     parser.add_argument("--days", type=parse_days, metavar="DAYS",
@@ -31,7 +31,7 @@ def main():
     if args.days is not None and args.schedule is None:
         parser.error("--days ต้องใช้ร่วมกับ --schedule")
     if args.schedule is not None and args.date is not None:
-        parser.error("โหมด schedule ใช้ --booking-day today/tomorrow แทน --date")
+        parser.error("โหมด schedule ใช้ --booking-day today/tomorrow/both แทน --date")
     if args.date is not None and args.booking_day is not None:
         parser.error("เลือกใช้ --date หรือ --booking-day อย่างใดอย่างหนึ่ง")
     today = datetime.now(ZoneInfo("Asia/Bangkok")).date()
@@ -51,12 +51,16 @@ def execute_run(args, day):
     config = copy(args)
     offset = 1 if getattr(args, "booking_day", None) == "tomorrow" else 0
     config.date = args.date or (day + timedelta(days=offset))
+    config.booking_dates = (config.date,)
+    if args.date is None and getattr(args, "booking_day", None) in (None, "both"):
+        config.booking_dates = (day, day + timedelta(days=1))
     capture_mode = "debug" if getattr(args, "debug_capture", False) else "fast"
     artifacts = RunArtifacts(capture_mode=capture_mode)
     set_run_artifacts(artifacts)
     configure_logging(artifacts.log_file, verbose=args.verbose)
     LOGGER.info("โฟลเดอร์ผลการรัน: %s", artifacts.folder)
-    status("เริ่มทำงาน — จองวันที่ %s", config.date.isoformat())
+    status("เริ่มทำงาน — ลองจองวันที่ %s",
+           ", ".join(target.isoformat() for target in config.booking_dates))
     outcome = "interrupted"
     try:
         result = retry_missing_center(lambda: run_flow(config), retries=3)

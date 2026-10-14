@@ -7,7 +7,8 @@ import time
 import xml.etree.ElementTree as ET
 from .config import PACKAGE
 from .logging_setup import LOGGER
-from .ui import bounds
+from .ui import bounds, is_busy_screen
+from .errors import AppBusy
 from .run_artifacts import get_run_artifacts
 from .middleware import CaptureLoggingMiddleware
 from .android_bridge import AndroidBridge
@@ -60,6 +61,7 @@ class AndroidDevice:
     def read_ui(self, *, cached=False):
         if cached and self.cache_valid:
             self.record_metric("ui_cache_hit", 0)
+            self.check_busy_screen(self.cached_root)
             return self.cached_root
         started = time.perf_counter()
         try:
@@ -78,7 +80,12 @@ class AndroidDevice:
             self.record_metric("ui_read", time.perf_counter() - started)
         self.cached_root, self.cache_valid = root, True
         self.middleware.observe_ui(self, root)
+        self.check_busy_screen(root)
         return root
+
+    def check_busy_screen(self, root):
+        if not self.middleware.reading_snapshot and is_busy_screen(root):
+            raise AppBusy("พบหน้ารอผู้ใช้บริการจำนวนมากของแอป")
 
     def read_ui_legacy(self):
         started = time.perf_counter()
@@ -126,6 +133,8 @@ class AndroidDevice:
         while time.monotonic() < deadline:
             root = initial if initial is not None else self.read_ui()
             initial = None
+            if is_busy_screen(root):
+                raise AppBusy("พบหน้ารอผู้ใช้บริการจำนวนมากของแอป")
             if self.dismiss_dialog(root):
                 self.pause()
                 continue

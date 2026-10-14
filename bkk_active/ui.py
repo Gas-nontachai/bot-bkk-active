@@ -35,6 +35,31 @@ def ui_labels(root):
             for key in ("text", "content-desc") if (value := node.get(key, ""))]
 
 
+def is_busy_screen(root):
+    text = " ".join(ui_labels(root))
+    return ("กรุณารอสักครู่" in text and "โปรดอย่าออกจากหน้านี้" in text
+            and "ผู้ใช้บริการพร้อมกันจำนวนมาก" in text)
+
+
+def court_button(root, number):
+    for name in (f"แบดมินตัน สนาม {number}", f"สนามแบดมินตัน {number}"):
+        node = activity_button(root, name)
+        if node is not None:
+            return node
+    return None
+
+
+def back_button(root):
+    # The app exposes its header back arrow as an icon glyph in content-desc.
+    return activity_button(root, "\uf12f")
+
+
+def is_court_list(root):
+    return ("เลือกจองวัน-เวลา" not in ui_labels(root)
+            and any(re.fullmatch(r"(?:แบดมินตัน สนาม|สนามแบดมินตัน) [1-7]", label)
+                    for label in ui_labels(root)))
+
+
 def selected_date_matches(root, target):
     # หน้าตามภาพแสดงวันและเดือนของวันที่เลือกใต้แถบวันที่
     pattern = re.compile(rf"(?<!\d){target.day}\s+{THAI_MONTHS[target.month - 1]}(?!\S)")
@@ -56,7 +81,7 @@ def booking_details_match(root, target, court_number, interval):
     date_ok = selected_date_matches(root, target) or any(
         re.search(rf"(?<!\d)0?{target.day}[/.-]0?{target.month}[/.-]{year}(?!\d)", text)
         for year in (target.year, target.year + 543))
-    court_ok = bool(re.search(rf"สนามแบดมินตัน\s*{court_number}(?!\d)", text)
+    court_ok = bool(re.search(rf"(?:แบดมินตัน\s+สนาม|สนามแบดมินตัน)\s*{court_number}(?!\d)", text)
                     or re.search(rf"badminton(?: court)?[^,\n]*?\b{court_number}\b", text, re.I))
     begin = interval.split("–")[0]
     hour, minute = map(int, begin.split(":"))

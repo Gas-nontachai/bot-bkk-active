@@ -1,15 +1,17 @@
 import unittest
 import struct
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 import xml.etree.ElementTree as ET
 from datetime import date
 
 from bkk_active.config import PACKAGE
 from bkk_active.errors import CenterNotFound
-from bkk_active.ui import activity_button, confirmation_matches, is_review_page, selected_date_matches
+from bkk_active.ui import (activity_button, confirmation_matches, court_button,
+                           is_court_list, is_review_page, selected_date_matches)
 from bkk_active.policy import available_slot, ranked_courts
 from bkk_active.retry import retry_missing_center
 from bkk_active.vision import orange_submit_center
+from bkk_active.flows.schedule import choose_date
 
 
 def node(**attributes):
@@ -29,6 +31,60 @@ def schedule(*entries):
 
 
 class BookingSelectionTests(unittest.TestCase):
+    def test_choose_tomorrow_taps_day_and_waits_for_selected_date(self):
+        root = node()
+        tomorrow = node(clickable="true", **{"content-desc": "15, พฤ."})
+        tomorrow.append(node(text="15"))
+        root.extend((tomorrow, node(text="14 ตุลาคม")))
+        updated = node()
+        updated.append(node(text="15 ตุลาคม"))
+        device = Mock()
+
+        def wait_for(predicate, message):
+            self.assertFalse(predicate(root))
+            self.assertTrue(predicate(updated))
+            return updated
+
+        device.wait_for.side_effect = wait_for
+        self.assertIs(choose_date(device, type("Config", (), {"date": date(2026, 10, 15)})(), root), updated)
+        device.tap.assert_called_once_with(tomorrow)
+
+    def test_choose_today_keeps_already_selected_date(self):
+        root = node()
+        root.append(node(text="14 ตุลาคม"))
+        device = Mock()
+        self.assertIs(choose_date(device, type("Config", (), {"date": date(2026, 10, 14)})(), root), root)
+        device.tap.assert_not_called()
+        device.wait_for.assert_not_called()
+
+    def test_court_cards_support_both_names_and_exact_numbers(self):
+        for name in ("แบดมินตัน สนาม", "สนามแบดมินตัน"):
+            with self.subTest(name=name):
+                root = node()
+                wrong = node(text=f"{name} 10", clickable="true")
+                card = node(clickable="true")
+                card.append(node(text=f"{name} 1"))
+                root.extend((wrong, card))
+                self.assertTrue(is_court_list(root))
+                self.assertIs(court_button(root, 1), card)
+                self.assertIsNone(court_button(root, 2))
+                root.append(node(text="เลือกจองวัน-เวลา"))
+                self.assertFalse(is_court_list(root))
+
+    def test_activity_and_other_court_numbers_are_not_court_list(self):
+        for label in ("สนามแบดมินตัน", "แบดมินตัน สนาม 10", "สนามแบดมินตัน 10"):
+            root = node()
+            root.append(node(text=label, clickable="true"))
+            self.assertFalse(is_court_list(root))
+            self.assertIsNone(court_button(root, 1))
+
+    def test_confirmation_accepts_current_court_name(self):
+        root = node()
+        for text in ("Confirm Booking", "14/10/2569", "18:00 น.", "แบดมินตัน สนาม 2"):
+            root.append(node(text=text))
+        self.assertTrue(confirmation_matches(root, date(2026, 10, 14), 2, "18:00–19:00"))
+        self.assertFalse(confirmation_matches(root, date(2026, 10, 14), 1, "18:00–19:00"))
+
     def test_slots_can_start_at_nonzero_minutes(self):
         root = schedule(("19:00 - 20:00", "ว่าง"), ("18:20 - 19:20", "ว่าง"))
         self.assertEqual(available_slot(root)[1], "18:20–19:20")

@@ -9,6 +9,22 @@ from bkk_active.cli import execute_run, main
 
 
 class CliTests(unittest.TestCase):
+    def test_booking_day_modes_and_explicit_date(self):
+        today, tomorrow = date(2026, 12, 31), date(2027, 1, 1)
+        for mode, explicit, expected in ((None, None, (today, tomorrow)),
+                                         ("both", None, (today, tomorrow)),
+                                         ("today", None, (today,)),
+                                         ("tomorrow", None, (tomorrow,)),
+                                         (None, tomorrow, (tomorrow,))):
+            args = SimpleNamespace(serial="test", date=explicit, booking_day=mode, verbose=False)
+            with self.subTest(mode=mode, explicit=explicit), \
+                    patch("bkk_active.cli.RunArtifacts"), \
+                    patch("bkk_active.cli.configure_logging"), \
+                    patch("bkk_active.cli.set_run_artifacts"), \
+                    patch("bkk_active.cli.run_flow") as flow:
+                execute_run(args, today)
+                self.assertEqual(flow.call_args.args[0].booking_dates, expected)
+
     def test_tomorrow_is_recomputed_for_each_scheduled_run(self):
         args = SimpleNamespace(serial="test", center="center", date=None,
                                booking_day="tomorrow", verbose=False)

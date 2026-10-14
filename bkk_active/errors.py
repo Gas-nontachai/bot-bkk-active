@@ -3,3 +3,7 @@
 
 class CenterNotFound(RuntimeError):
     pass
+
+
+class AppBusy(RuntimeError):
+    """The app displays its blocking high-traffic waiting screen."""

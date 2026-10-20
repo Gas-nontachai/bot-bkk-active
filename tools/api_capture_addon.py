@@ -11,7 +11,8 @@ class ApiCaptureAddon:
     def __init__(self):
         self.events = ApiEvents(os.environ["BKK_API_FOLDER"],
                                 os.environ.get("BKK_API_HOSTS", "").split(),
-                                os.environ.get("BKK_API_BODIES") == "1")
+                                os.environ.get("BKK_API_BODIES") == "1",
+                                raw=os.environ.get("BKK_API_RAW") == "1")
 
     def running(self):
         (self.events.folder / ".api-ready").touch()

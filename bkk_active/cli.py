@@ -50,6 +50,8 @@ def main():
     parser.add_argument("--api-port", type=int, default=8080, help="พอร์ต proxy บนเครื่อง (ค่าเริ่มต้น: 8080)")
     parser.add_argument("--api-host", action="append", help="เก็บเฉพาะ hostname นี้ ระบุซ้ำได้")
     parser.add_argument("--api-bodies", action="store_true", help="เก็บ JSON body พร้อมปิดบังข้อมูลสำคัญ")
+    parser.add_argument("--api-raw", action="store_true",
+                        help="เก็บ URL, headers และ body ทั้งหมด ไม่ปิดบัง token/cookie/ข้อมูลส่วนตัว")
     args = parser.parse_args()
     if args.capture_only:
         args.capture_api = True
@@ -59,8 +61,8 @@ def main():
         parser.error("--start-time ต้องก่อน --end-time และช่วงเวลาต้องอยู่ภายในวันเดียวกัน")
     if not 1 <= args.api_port <= 65535:
         parser.error("--api-port ต้องอยู่ระหว่าง 1–65535")
-    if (args.api_host or args.api_bodies) and not args.capture_api:
-        parser.error("--api-host และ --api-bodies ต้องใช้ร่วมกับ --capture-api")
+    if (args.api_host or args.api_bodies or args.api_raw) and not args.capture_api:
+        parser.error("--api-host, --api-bodies และ --api-raw ต้องใช้ร่วมกับ --capture-api")
     if args.api_bodies and not args.api_host:
         parser.error("--api-bodies ต้องระบุ --api-host เพื่อจำกัด body ให้เฉพาะ API ที่ต้องการ")
     if args.days is not None and args.schedule is None:

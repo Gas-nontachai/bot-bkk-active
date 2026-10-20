@@ -42,7 +42,8 @@ class ApiCapture(AbstractContextManager):
         env = os.environ.copy()
         env.update(BKK_API_FOLDER=str(self.artifacts.folder),
                    BKK_API_HOSTS=" ".join(getattr(self.config, "api_host", None) or []),
-                   BKK_API_BODIES="1" if getattr(self.config, "api_bodies", False) else "0")
+                   BKK_API_BODIES="1" if getattr(self.config, "api_bodies", False) else "0",
+                   BKK_API_RAW="1" if getattr(self.config, "api_raw", False) else "0")
         confdir = PROJECT_ROOT / ".api-capture"
         confdir.mkdir(mode=0o700, exist_ok=True)
         (self.artifacts.folder / "api.jsonl").touch(mode=0o600)

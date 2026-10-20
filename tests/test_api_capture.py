@@ -1,4 +1,5 @@
 from datetime import date
+import base64
 import json
 import io
 from pathlib import Path
@@ -31,7 +32,7 @@ def flow():
 
 class ApiCaptureTests(unittest.TestCase):
     def test_api_options_require_capture_host_and_valid_port(self):
-        for options in (['--api-bodies'], ['--api-host', 'api.test'],
+        for options in (['--api-bodies'], ['--api-raw'], ['--api-host', 'api.test'],
                         ['--capture-api', '--api-bodies'], ['--api-port', '65536']):
             with self.subTest(options=options), \
                     patch('sys.argv', ['open_booking.py'] + options), \
@@ -41,6 +42,36 @@ class ApiCaptureTests(unittest.TestCase):
                     main()
                 self.assertEqual(error.exception.code, 2)
                 execute.assert_not_called()
+
+    def test_raw_capture_preserves_url_headers_and_request_response_bodies(self):
+        with tempfile.TemporaryDirectory() as folder:
+            recorder = ApiEvents(folder, raw=True)
+            request = flow()
+            recorder.request(request)
+            recorder.finished(request)
+            events = [json.loads(line) for line in (Path(folder) / 'api.jsonl').read_text().splitlines()]
+            self.assertEqual(events[0]['url'], request.request.pretty_url)
+            self.assertEqual(events[0]['headers']['authorization'], 'Bearer secret')
+            self.assertEqual(events[0]['headers']['cookie'], 'private')
+            self.assertEqual(events[1]['headers']['set-cookie'], 'secret')
+            self.assertEqual(events[0]['body']['token'], 'secret')
+            self.assertEqual(events[1]['body']['status'], 'busy')
+        for data, kind in ((b'\x00\xff' * 40000, 'application/octet-stream'),
+                           (b'token=secret&court=3', 'application/x-www-form-urlencoded'),
+                           (b'invalid json', 'application/json')):
+            info = message_info(message(data, kind), raw=True)
+            self.assertEqual(base64.b64decode(info['body_base64']), data)
+        info = message_info(message(json.dumps({'token': 'x' * 70000}).encode()), raw=True)
+        self.assertEqual(len(info['body']['token']), 70000)
+
+    def test_raw_cli_needs_no_body_flag_and_can_filter_hosts(self):
+        for hosts in ([], ['--api-host', 'cstd.bangkok.go.th']):
+            with patch('sys.argv', ['open_booking.py', '--capture-only', '--api-raw'] + hosts), \
+                    patch('bkk_active.cli.configure_logging'), \
+                    patch('bkk_active.cli.execute_run') as execute:
+                main()
+                self.assertTrue(execute.call_args.args[0].api_raw)
+                self.assertTrue(execute.call_args.args[0].capture_api)
 
     def test_capture_does_not_replace_an_existing_reverse_mapping(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -96,6 +127,24 @@ class ApiCaptureTests(unittest.TestCase):
         self.assertNotIn('secret', url)
         self.assertNotIn('private', url)
         self.assertNotIn('123456789', url)
+
+    def test_booking_item_ids_and_dates_are_visible_without_exposing_credentials(self):
+        item = '8c8431e7-c106-4601-acee-51b0b41c6924'
+        for endpoint in ('active', 'slot'):
+            url = safe_url(f'https://user:secret@cstd.bangkok.go.th/reservation/api/reservation/'
+                           f'item/{item}/{endpoint}?BOOKING_DATE=2026-10-21&BOOKER_ID=private&token=secret#secret')
+            self.assertIn(f'/item/{item}/{endpoint}', url)
+            self.assertIn('BOOKING_DATE=2026-10-21', url)
+            self.assertNotIn('private', url)
+            self.assertNotIn('secret', url)
+        for host, path in (('other.test', f'/reservation/api/reservation/item/{item}/slot'),
+                           ('cstd.bangkok.go.th', f'/app-service/api/users/{item}/card')):
+            url = safe_url(f'https://{host}{path}?BOOKING_DATE=2026-10-21')
+            self.assertNotIn(item, url)
+            self.assertNotIn('2026-10-21', url)
+        url = safe_url(f'https://cstd.bangkok.go.th/reservation/api/reservation/item/{item}/slot'
+                       '?BOOKING_DATE=private')
+        self.assertNotIn('private', url)
 
     def test_host_filter_pending_and_connection_error(self):
         with tempfile.TemporaryDirectory() as parent:

@@ -1,5 +1,6 @@
 """Privacy-conscious API events; usable without installing mitmproxy."""
 from datetime import datetime
+import base64
 import json
 from pathlib import Path
 import re
@@ -28,7 +29,9 @@ def redact(value):
 
 def safe_url(url):
     parts = urlsplit(url)
-    path = "/".join(REDACTED if (SENSITIVE.search(segment)
+    public_item = (parts.hostname == "cstd.bangkok.go.th" and re.fullmatch(
+        r"/reservation/api/reservation/item/[0-9a-fA-F-]{1,64}/(?:active|slot)", parts.path))
+    path = parts.path if public_item else "/".join(REDACTED if (SENSITIVE.search(segment)
                     or re.fullmatch(r"\d{5,}|[\w-]{24,}", segment)
                     or "@" in segment) else segment for segment in parts.path.split("/"))
     host = parts.hostname or ""
@@ -37,14 +40,22 @@ def safe_url(url):
     if parts.port is not None:
         host += f":{parts.port}"
     return urlunsplit((parts.scheme, host, path,
-                      urlencode([(key, REDACTED) for key, _ in parse_qsl(parts.query,
-                                                                      keep_blank_values=True)]), ""))
+                      urlencode([(key, value if (public_item and key == "BOOKING_DATE"
+                                  and re.fullmatch(r"\d{4}-\d{2}-\d{2}", value)) else REDACTED)
+                                 for key, value in parse_qsl(parts.query, keep_blank_values=True)]), ""))
 
 
-def message_info(message, include_bodies=False):
+def message_info(message, include_bodies=False, raw=False):
     headers = {key.lower(): value for key, value in message.headers.items()
-               if key.lower() in SAFE_HEADERS}
+               if raw or key.lower() in SAFE_HEADERS}
     info = {"headers": headers, "body_bytes": len(message.raw_content or b"")}
+    if raw:
+        content = message.content or b""
+        try:
+            info["body"] = json.loads(content)
+        except (ValueError, UnicodeError):
+            info["body_base64"] = base64.b64encode(content).decode("ascii")
+        return info
     if not include_bodies:
         return info
     content = message.content or b""
@@ -65,10 +76,11 @@ def message_info(message, include_bodies=False):
 
 
 class ApiEvents:
-    def __init__(self, folder, hosts=(), include_bodies=False):
+    def __init__(self, folder, hosts=(), include_bodies=False, raw=False):
         self.folder = Path(folder)
         self.hosts = {host.lower() for host in hosts}
         self.include_bodies = include_bodies
+        self.raw = raw
 
     def allowed(self, host):
         return not self.hosts or host.lower() in self.hosts
@@ -90,8 +102,9 @@ class ApiEvents:
         context = self.context()
         flow.metadata["bkk_api_context"] = context
         self.write({"event": "request", "flow_id": flow.id, "context": context,
-                    "method": flow.request.method, "url": safe_url(flow.request.pretty_url),
-                    **message_info(flow.request, self.include_bodies)})
+                    "method": flow.request.method,
+                    "url": flow.request.pretty_url if self.raw else safe_url(flow.request.pretty_url),
+                    **message_info(flow.request, self.include_bodies, self.raw)})
 
     def finished(self, flow, failed=False):
         if "bkk_api_context" not in flow.metadata:
@@ -105,7 +118,7 @@ class ApiEvents:
             event["error"] = "connection_or_protocol_error"
         else:
             event["status_code"] = flow.response.status_code
-            event.update(message_info(flow.response, self.include_bodies))
+            event.update(message_info(flow.response, self.include_bodies, self.raw))
         self.write(event)
 
     def tls_failed(self, data, side):

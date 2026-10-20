@@ -250,10 +250,23 @@ python3 open_booking.py --capture-only --serial emulator-5556 --api-host cstd.ba
 อุปกรณ์ยังต้องเชื่อถือ CA ของ mitmproxy ตามคำอธิบายด้านล่าง
 
 ค่าเริ่มต้นไม่เก็บ body, Authorization หรือ Cookie และปิดบังค่า query string
+ยกเว้น URL `cstd.bangkok.go.th/reservation/api/reservation/item/<ID>/active` และ `/slot`
+ที่เก็บ ID รายการศูนย์/สนาม และ `BOOKING_DATE` รูปแบบ `YYYY-MM-DD` ไว้เพื่อเทียบกับการจอง
 `--api-bodies` ต้องระบุ hostname: เก็บเฉพาะ JSON ไม่เกิน 64 KiB พร้อมปิดบัง key
 เช่น token, password, email, phone, name และ user ID; form values ถูกปิดบังทั้งหมด
 เนื้อหาแบบอื่นจะไม่เก็บ การปิดบัง JSON อาศัยชื่อ key และรูปแบบค่า จึงควรตรวจไฟล์ก่อนแชร์
-ไม่สร้างไฟล์ raw flow หรือ HAR ที่มีข้อมูลรับรองเต็ม ๆ
+โหมดปกติไม่สร้างไฟล์ raw flow หรือ HAR ที่มีข้อมูลรับรองเต็ม ๆ
+
+หากต้องการข้อมูลครบโดยไม่ปิดบัง ใช้ `--api-raw` แทน `--api-bodies`:
+
+```sh
+python3 open_booking.py --capture-only --serial emulator-5556 --api-host cstd.bangkok.go.th --api-raw
+```
+
+โหมดนี้เก็บ URL, query, headers รวม Authorization/Cookie และ body โดยไม่จำกัด 64 KiB
+JSON เก็บใน `body`; เนื้อหาอื่นเก็บใน `body_base64` ซึ่งถอดกลับเป็น bytes ได้
+ไฟล์ `api.jsonl` มีข้อมูลรับรองและข้อมูลส่วนตัวจริง ให้เก็บไว้ในเครื่องและไม่แชร์หรือ commit
+ถ้าไม่ระบุ `--api-host` จะเก็บทุก hostname ที่ผ่าน proxy
 
 HTTPS ต้องให้แอปยอมรับ CA ของ mitmproxy ก่อนจึงเห็น request/response
 CA สาธารณะอยู่ที่ `.api-capture/mitmproxy-ca-cert.cer` หลังเปิด proxy ครั้งแรก

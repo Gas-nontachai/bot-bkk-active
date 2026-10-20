@@ -3,5 +3,6 @@ tools/android-text-input/.build/
 *.log
 artifacts/
 logger/
+session.json
 .venv-api/
 .api-capture/

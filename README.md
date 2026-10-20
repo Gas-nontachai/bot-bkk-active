@@ -239,6 +239,16 @@ python3 open_booking.py --capture-api --api-host api.example.com --api-bodies
 ```
 
 `api.example.com` เป็นตัวอย่าง ต้องเปลี่ยนเป็น hostname ที่พบจริง
+หากต้องการกดแอปเองโดยไม่รันบอตจอง ใช้ `--capture-only` (เปิด capture ให้ด้วย):
+
+```sh
+python3 open_booking.py --capture-only --serial emulator-5556 --api-host cstd.bangkok.go.th --api-bodies
+```
+
+เปิดแอปและกดใช้งานเองบนอุปกรณ์ที่ระบุ ผลอยู่ใน `logger/<รอบรัน>/api.jsonl`
+เปิด terminal นี้ไว้ แล้วกด Ctrl+C เพื่อหยุดและคืนค่า proxy; ใช้ร่วมกับ `--schedule` ไม่ได้
+อุปกรณ์ยังต้องเชื่อถือ CA ของ mitmproxy ตามคำอธิบายด้านล่าง
+
 ค่าเริ่มต้นไม่เก็บ body, Authorization หรือ Cookie และปิดบังค่า query string
 `--api-bodies` ต้องระบุ hostname: เก็บเฉพาะ JSON ไม่เกิน 64 KiB พร้อมปิดบัง key
 เช่น token, password, email, phone, name และ user ID; form values ถูกปิดบังทั้งหมด

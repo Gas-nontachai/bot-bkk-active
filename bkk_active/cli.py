@@ -1,5 +1,6 @@
 """Command-line arguments and retry entry point."""
 import argparse
+import time
 from datetime import date, datetime, timedelta
 from copy import copy
 from contextlib import nullcontext
@@ -44,10 +45,16 @@ def main():
     parser.add_argument("--ui-backend", choices=("bridge", "uiautomator"), default="bridge",
                         help="วิธีอ่านหน้าจอ (ค่าเริ่มต้น: Android bridge แบบเร็ว)")
     parser.add_argument("--capture-api", action="store_true", help="จับ HTTP/HTTPS ผ่าน mitmproxy")
+    parser.add_argument("--capture-only", action="store_true",
+                        help="จับ API อย่างเดียว ให้กดแอปเองจนกด Ctrl+C โดยไม่รันบอตจอง")
     parser.add_argument("--api-port", type=int, default=8080, help="พอร์ต proxy บนเครื่อง (ค่าเริ่มต้น: 8080)")
     parser.add_argument("--api-host", action="append", help="เก็บเฉพาะ hostname นี้ ระบุซ้ำได้")
     parser.add_argument("--api-bodies", action="store_true", help="เก็บ JSON body พร้อมปิดบังข้อมูลสำคัญ")
     args = parser.parse_args()
+    if args.capture_only:
+        args.capture_api = True
+        if args.schedule is not None:
+            parser.error("--capture-only ใช้ร่วมกับ --schedule ไม่ได้")
     if args.start_minute >= args.end_minute:
         parser.error("--start-time ต้องก่อน --end-time และช่วงเวลาต้องอยู่ภายในวันเดียวกัน")
     if not 1 <= args.api_port <= 65535:
@@ -87,12 +94,22 @@ def execute_run(args, day):
     set_run_artifacts(artifacts)
     configure_logging(artifacts.log_file, verbose=args.verbose)
     LOGGER.info("โฟลเดอร์ผลการรัน: %s", artifacts.folder)
-    status("เริ่มทำงาน — ลองจองวันที่ %s",
-           ", ".join(target.isoformat() for target in config.booking_dates))
+    manual = getattr(args, "capture_only", False)
+    if not manual:
+        status("เริ่มทำงาน — ลองจองวันที่ %s",
+               ", ".join(target.isoformat() for target in config.booking_dates))
     outcome = "interrupted"
     try:
         capture = ApiCapture(artifacts, config) if getattr(args, "capture_api", False) else nullcontext()
         with capture:
+            if manual:
+                artifacts.set_step("manual-api-capture")
+                artifacts.api_context.update(booking_date=None, court=None)
+                artifacts.publish_api_context()
+                status("จับ API อย่างเดียว — กดแอปเองได้ กด Ctrl+C เพื่อหยุดและคืนค่า proxy")
+                while capture.process.poll() is None:
+                    time.sleep(1)
+                raise RuntimeError("mitmproxy หยุดทำงานระหว่างจับ API")
             result = retry_missing_center(lambda: run_flow(config), retries=3)
         outcome = str(result or "finished")
         status("จบรอบ — log: logger/%s/", artifacts.folder.name)

@@ -1,17 +1,16 @@
 """Submit the existing review form and finish."""
 from ..middleware import flow_step
-from ..ui import is_review_page, ui_labels
-from ..vision import orange_submit_center
+from ..ui import is_review_page, review_button, ui_labels
 import time
 from ..logging_setup import LOGGER, status
 
 
 @flow_step("review")
 def submit_review(device, config, root):
-    raw = device.screenshot_raw()
-    x, y = orange_submit_center(raw)
-    LOGGER.info("กดปุ่ม Review สีส้มที่ (%d, %d)", x, y)
-    device.run("shell", "input", "tap", str(x), str(y))
+    root = device.wait_for(lambda ui: is_review_page(ui) and review_button(ui) is not None,
+                           "ไม่พบปุ่มรีวิวที่พร้อมกด จึงยังไม่ได้ส่งรีวิว", initial=root)
+    LOGGER.info("กดปุ่มรีวิว")
+    device.tap(review_button(root))
     deadline = time.monotonic() + 20
     while time.monotonic() < deadline:
         root = device.read_ui()

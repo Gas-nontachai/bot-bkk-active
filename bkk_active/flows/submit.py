@@ -1,6 +1,7 @@
 """Validate the booking summary and submit once."""
 from ..middleware import flow_step
-from ..ui import confirmation_matches, is_payment_page, is_review_page, ui_labels
+from ..ui import (activity_button, booking_details_match, confirmation_matches,
+                  is_payment_page, is_review_page, ui_labels)
 from ..vision import orange_submit_center
 from .review import submit_review
 from .payment import defer_payment
@@ -31,7 +32,8 @@ def select_slot(device, config, number, slot):
     deadline = time.monotonic() + 25
     while time.monotonic() < deadline:
         root = device.read_ui()
-        text = " ".join(ui_labels(root)).lower()
+        labels = ui_labels(root)
+        text = " ".join(labels).lower()
         failed = any(word in text for word in ("ไม่สำเร็จ", "ผิดพลาด", "ไม่สามารถ", "failed"))
         success = (any(word in text for word in ("จองสำเร็จ", "การจองสำเร็จ", "booking successful", "booking confirmed"))
                    or ("การจองของคุณ" in ui_labels(root)
@@ -45,6 +47,19 @@ def select_slot(device, config, number, slot):
         if is_review_page(root):
             LOGGER.info("ถึงหน้า Booking Review หลัง Submit การจอง")
             submit_review(device, config, root)
+            return
+        if "สำเร็จ" in labels and "หมายเลขการจอง" in labels:
+            if not booking_details_match(root, config.date, number, interval):
+                raise RuntimeError("จองสำเร็จ แต่วัน สนาม หรือเวลาไม่ตรง จึงไม่ได้กดเสร็จสิ้น")
+            done = activity_button(root, "เสร็จสิ้น")
+            if done is None:
+                raise RuntimeError("จองสำเร็จแล้ว แต่ไม่พบปุ่มเสร็จสิ้นที่พร้อมกด")
+            LOGGER.info("จองสำเร็จ: สนาม %d วันที่ %s เวลา %s — กดเสร็จสิ้น",
+                        number, config.date.isoformat(), interval)
+            device.tap(done)
+            review_root = device.wait_for(is_review_page,
+                                         "กดเสร็จสิ้นแล้ว แต่ยังไม่พบหน้ารีวิว จึงไม่กดซ้ำ")
+            submit_review(device, config, review_root)
             return
         if success and not booking_logged:
             LOGGER.info("จองสำเร็จ: สนาม %d วันที่ %s เวลา %s", number, config.date.isoformat(), interval)

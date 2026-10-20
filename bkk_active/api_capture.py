@@ -79,7 +79,8 @@ class ApiCapture(AbstractContextManager):
         if self.proxy_changed:
             try:
                 if self.previous_proxy in ("null", ""):
-                    self.command("shell", "settings", "delete", "global", "http_proxy")
+                    # Deleting the legacy key can leave Android's global proxy active.
+                    self.command("shell", "settings", "put", "global", "http_proxy", ":0")
                 else:
                     self.command("shell", "settings", "put", "global", "http_proxy", self.previous_proxy)
                 self.proxy_changed = False

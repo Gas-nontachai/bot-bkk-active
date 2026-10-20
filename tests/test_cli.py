@@ -3,12 +3,41 @@ import io
 from pathlib import Path
 from types import SimpleNamespace
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import MagicMock, Mock, patch
 
 from bkk_active.cli import execute_run, main
 
 
 class CliTests(unittest.TestCase):
+    def test_capture_only_enables_capture_and_rejects_schedule(self):
+        with patch("sys.argv", ["open_booking.py", "--capture-only", "--api-host", "api.test", "--api-bodies"]), \
+                patch("bkk_active.cli.configure_logging"), \
+                patch("bkk_active.cli.execute_run") as execute:
+            main()
+            self.assertTrue(execute.call_args.args[0].capture_api)
+        with patch("sys.argv", ["open_booking.py", "--capture-only", "--schedule", "07:00"]), \
+                patch("sys.stderr", io.StringIO()):
+            with self.assertRaises(SystemExit):
+                main()
+
+    def test_manual_capture_never_runs_booking_and_cleans_up(self):
+        args = SimpleNamespace(serial="test", date=None, verbose=False,
+                               capture_only=True, capture_api=True)
+        for stopped in (False, True):
+            with self.subTest(proxy_stopped=stopped), \
+                    patch("bkk_active.cli.RunArtifacts"), \
+                    patch("bkk_active.cli.configure_logging"), \
+                    patch("bkk_active.cli.set_run_artifacts"), \
+                    patch("bkk_active.cli.ApiCapture") as capture, \
+                    patch("bkk_active.cli.time.sleep", side_effect=KeyboardInterrupt), \
+                    patch("bkk_active.cli.run_flow") as flow:
+                capture.return_value = MagicMock()
+                capture.return_value.process.poll.return_value = 1 if stopped else None
+                with self.assertRaises(RuntimeError if stopped else KeyboardInterrupt):
+                    execute_run(args, date(2026, 10, 20))
+                flow.assert_not_called()
+                capture.return_value.__exit__.assert_called_once()
+
     def test_booking_time_window_defaults_and_custom_bounds(self):
         for options, expected in (([], (0, 1440)),
                                   (["--start-time", "18:00", "--end-time", "21:00"], (1080, 1260)),

@@ -125,6 +125,11 @@ def is_review_page(root):
         "ประเมินความพึงพอใจ")) or ("review" in labels and "booking rating" in labels)
 
 
+def review_button(root):
+    return next((button for name in ("รีวิว", "Review", "review")
+                 if (button := activity_button(root, name)) is not None), None)
+
+
 def booking_tab(root):
     return next((node for node in root.iter("node")
                  if node.get("package") == PACKAGE

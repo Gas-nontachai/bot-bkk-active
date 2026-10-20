@@ -176,14 +176,16 @@ class ApiCaptureTests(unittest.TestCase):
         processes[0].terminate.assert_called_once()
         processes[0].wait.assert_called_once_with(timeout=5)
         self.assertIn(('reverse', '--remove', 'tcp:18080'), commands)
-        restore = ('shell', 'settings', 'delete', 'global', 'http_proxy') if previous == 'null' else (
-            'shell', 'settings', 'put', 'global', 'http_proxy', previous)
+        restore = ('shell', 'settings', 'put', 'global', 'http_proxy',
+                   ':0' if previous in ('null', '') else previous)
         self.assertIn(restore, commands)
+        self.assertNotIn(('shell', 'settings', 'delete', 'global', 'http_proxy'), commands)
         self.assertTrue((artifacts.folder / 'api-summary.json').exists())
         self.assertIsNone(artifacts.api_context_file)
 
     def test_restores_proxy_on_success_exception_and_partial_startup(self):
-        for previous, body_error, fail_write in (('null', False, False), ('old:9999', True, False),
+        for previous, body_error, fail_write in (('null', False, False), ('', False, False),
+                                                (':0', False, False), ('old:9999', True, False),
                                                 ('null', False, True)):
             with self.subTest(previous=previous, fail_write=fail_write), tempfile.TemporaryDirectory() as folder:
                 self.run_capture(folder, previous, body_error, fail_write)

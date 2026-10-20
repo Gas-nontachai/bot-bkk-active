@@ -27,6 +27,35 @@ def payment_page():
 
 
 class PaymentTests(unittest.TestCase):
+    def test_success_receipt_finishes_once_before_review(self):
+        root = node()
+        for text in ("ยืนยันการจอง", "ศูนย์กีฬาเบญจกิติ", "สำเร็จ", "21/10/2569",
+                     "07:00 น.", "สนามแบดมินตัน แบดมินตัน สนาม 1", "หมายเลขการจอง", "123456"):
+            root.append(node(text=text))
+        done = node(clickable="true", bounds="[53,2131][1028,2275]")
+        done.append(node(text="เสร็จสิ้น"))
+        root.append(done)
+        review = node(text="Booking Review")
+        for target in (date(2026, 10, 21), date(2026, 10, 20)):
+            with self.subTest(target=target), \
+                    patch("bkk_active.flows.submit.orange_submit_center", return_value=(400, 1700)), \
+                    patch("bkk_active.flows.submit.submit_review") as submit_review:
+                device = Mock()
+                device.read_ui.return_value = root
+                device.wait_for.side_effect = [node(), review]
+                slot = node()
+                config = SimpleNamespace(date=target)
+                if target.day == 21:
+                    select_slot(device, config, 1, (slot, "07:00–08:00"))
+                    self.assertEqual([c.args[0] for c in device.tap.call_args_list], [slot, done])
+                    submit_review.assert_called_once_with(device, config, review)
+                else:
+                    with self.assertRaisesRegex(RuntimeError, "ไม่ตรง"):
+                        select_slot(device, config, 1, (slot, "07:00–08:00"))
+                    device.tap.assert_called_once_with(slot)
+                    submit_review.assert_not_called()
+                device.run.assert_called_once_with("shell", "input", "tap", "400", "1700")
+
     def test_selects_pay_later_not_pay_now_or_full_page_container(self):
         root, later = payment_page()
         self.assertTrue(is_payment_page(root))

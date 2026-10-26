@@ -1,11 +1,13 @@
 """Book through the observed reservation API using a locally captured session."""
 from datetime import datetime
+from email.utils import parsedate_to_datetime
 import http.client
 import json
 import os
 from pathlib import Path
 import re
 import tempfile
+import time
 from urllib.parse import quote, urlencode, urlsplit
 
 from .logging_setup import LOGGER, status
@@ -132,12 +134,20 @@ def save_session(raw_log_path, session_path):
     return output
 
 
+class ApiHttpError(RuntimeError):
+    def __init__(self, message, status, retry_after=None):
+        super().__init__(message)
+        self.status = status
+        self.retry_after = retry_after
+
+
 class BookingApi:
     def __init__(self, bearer_token):
         self.headers = {"authorization": bearer_token}
 
-    def request(self, method, path, payload=None, query=None):
-        connection = http.client.HTTPSConnection(HOST, timeout=20)
+    def request(self, method, path, payload=None, query=None, *, timeout=None):
+        deadline = time.monotonic() + timeout if timeout is not None else None
+        connection = http.client.HTTPSConnection(HOST, timeout=20 if timeout is None else timeout)
         headers = {**self.headers, "Accept": "application/json"}
         body = None
         if payload is not None:
@@ -146,23 +156,44 @@ class BookingApi:
         target = path + ("?" + urlencode(query) if query else "")
         try:
             connection.request(method, target, body=body, headers=headers)
-            response = connection.getresponse()
-            data = response.read()
+            if deadline is None:
+                response = connection.getresponse()
+                data = response.read()
+            else:
+                socket = connection.sock
+                def remaining_timeout():
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise TimeoutError("API request deadline exceeded")
+                    socket.settimeout(remaining)
+
+                remaining_timeout()
+                response = connection.getresponse()
+                chunks = []
+                while True:
+                    remaining_timeout()
+                    chunk = response.read1(65536)
+                    if not chunk:
+                        break
+                    chunks.append(chunk)
+                data = b"".join(chunks)
             LOGGER.info("API %s %s: HTTP %d", method, path, response.status)
             if response.status in (401, 403):
-                raise RuntimeError("API ไม่อนุญาตให้เข้าถึง: session อาจหมดอายุ ให้จับ raw log ใหม่")
+                raise ApiHttpError("API ไม่อนุญาตให้เข้าถึง: session อาจหมดอายุ ให้จับ raw log ใหม่",
+                                   response.status)
             if response.status == 404 and method == "GET" and path == BASE + "/booking":
                 if json.loads(data).get("message") == "Data not found":
                     return []
             if response.status not in (200, 201):
-                raise RuntimeError(f"API {method} {path}: HTTP {response.status}")
+                raise ApiHttpError(f"API {method} {path}: HTTP {response.status}",
+                                   response.status, response.getheader("Retry-After"))
             return json.loads(data)
         finally:
             connection.close()
 
-    def items(self, parent=None):
+    def items(self, parent=None, *, timeout=None):
         path = BASE + "/item/" + (quote(parent, safe="") + "/active" if parent else "active")
-        result = self.request("GET", path, query={"lang": "th"})
+        result = self.request("GET", path, query={"lang": "th"}, timeout=timeout)
         if not isinstance(result, list) or not all(isinstance(item, dict) for item in result):
             raise RuntimeError("รูปแบบรายการศูนย์/สนามจาก API ไม่ถูกต้อง")
         return result
@@ -179,6 +210,58 @@ def named(items, name):
     if len(matches) != 1 or not isinstance(matches[0].get("ID"), str):
         raise RuntimeError(f"หารายการชื่อตรงกันเพียงรายการเดียวไม่ได้: {name}")
     return matches[0]
+
+
+def find_center(api, name):
+    started = time.monotonic()
+    deadline = started + 5
+    attempts = 0
+    success = False
+    try:
+        while (remaining := deadline - time.monotonic()) > 0:
+            attempts += 1
+            http_status, count, reason = None, None, ""
+            delay = 0.5
+            try:
+                items = api.items(timeout=remaining)
+                http_status = 200
+                matches = [item for item in items if item.get("NAME") == name]
+                count = len(matches)
+                if count:
+                    center = named(matches, name)
+                    success = True
+                    return center
+                reason = "no_matches"
+            except ApiHttpError as error:
+                http_status = error.status
+                reason = f"http_{http_status}"
+                if http_status != 429 and http_status not in (408, 500, 502, 503, 504):
+                    raise
+                if http_status == 429 and error.retry_after:
+                    try:
+                        delay = max(delay, float(error.retry_after))
+                    except ValueError:
+                        try:
+                            retry_at = parsedate_to_datetime(error.retry_after).timestamp()
+                            delay = max(delay, retry_at - time.time())
+                        except (TypeError, ValueError, OverflowError):
+                            pass
+            except (OSError, http.client.HTTPException):
+                reason = "temporary_network_error"
+            except (RuntimeError, ValueError):
+                reason = "multiple_matches" if count and count > 1 else "invalid_response"
+                raise
+            finally:
+                status("Center search attempt=%d http_status=%s matches=%s reason=%s elapsed=%.3fs",
+                       attempts, http_status, count, reason or "found", time.monotonic() - started)
+            remaining = deadline - time.monotonic()
+            if delay >= remaining:
+                break
+            time.sleep(delay)
+        raise RuntimeError(f"ค้นหาศูนย์ไม่สำเร็จภายใน 5 วินาที: {name}")
+    finally:
+        status("Center search result=%s attempts=%d elapsed=%.3fs",
+               "success" if success else "failure", attempts, time.monotonic() - started)
 
 
 def minute(value):
@@ -208,7 +291,7 @@ def run_api_booking(args):
     booker = session["booker_id"]
     rating = session["rating_payload"]
     api = BookingApi(session["booking_bearer_token"])
-    center = named(api.items(), args.center)
+    center = find_center(api, args.center)
     activity = named(api.items(center["ID"]), "สนามแบดมินตัน")
     courts = [item for item in api.items(activity["ID"])
               if re.fullmatch(r"แบดมินตัน สนาม [1-7]", item.get("NAME", ""))]

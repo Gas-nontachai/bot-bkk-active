@@ -19,14 +19,13 @@ class StatusFilter(logging.Filter):
 class StatusFormatter(logging.Formatter):
     def format(self, record):
         timestamp = datetime.fromtimestamp(record.created, ZoneInfo("Asia/Bangkok"))
-        return f"{timestamp:%H:%M:%S} {record.getMessage()}"
+        return f"{timestamp:%H:%M:%S}.{timestamp.microsecond // 1000:03d} {record.getMessage()}"
 
 
 class BangkokFormatter(logging.Formatter):
     def formatTime(self, record, datefmt=None):
-        return datetime.fromtimestamp(record.created, ZoneInfo("Asia/Bangkok")).strftime(
-            "%Y-%m-%d %H:%M:%S %z"
-        )
+        timestamp = datetime.fromtimestamp(record.created, ZoneInfo("Asia/Bangkok"))
+        return f"{timestamp:%Y-%m-%d %H:%M:%S}.{timestamp.microsecond // 1000:03d} {timestamp:%z}"
 
 
 def configure_logging(log_file=None, *, verbose=False):

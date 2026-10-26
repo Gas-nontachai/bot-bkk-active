@@ -3,6 +3,7 @@
 """Read availability or explicitly book through the BKK Active API."""
 
 import argparse
+from copy import copy
 from datetime import date, datetime, time, timedelta
 import http.client
 import json
@@ -47,6 +48,7 @@ def resolve_dates(args):
 
 
 def run_once(args):
+    args = copy(args)
     artifacts = RunArtifacts()
     configure_logging(artifacts.log_file)
 
@@ -126,13 +128,8 @@ def run_schedule(args):
         try:
             result = run_once(args)
             status("ผลการทำงาน: %s", result["outcome"])
-        except (
-            RuntimeError,
-            OSError,
-            http.client.HTTPException,
-            ValueError
-        ) as error:
-            LOGGER.error("บอต API ทำงานไม่สำเร็จ: %s", error)
+        except Exception:
+            LOGGER.exception("บอต API ทำงานไม่สำเร็จ จะรอรอบถัดไป")
 
         # Continue to the next day's schedule.
 

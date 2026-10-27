@@ -128,6 +128,7 @@ class ApiLifecycleTests(unittest.TestCase):
         for book in (False, True):
             fixture = test_api_booking.ApiBookingTests()
             fixture.setUp()
+            self.addCleanup(fixture.doCleanups)
             fixture.args.book = book
             api = fixture.setup_api()
             api.items.side_effect = [[], [{"ID": "center", "NAME": fixture.args.center}],

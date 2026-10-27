@@ -286,7 +286,17 @@ def choose_slot(slots, begin, end):
     return None
 
 
+def booking_amount(value):
+    if value == "ไม่มี":
+        return "0"
+    if isinstance(value, (str, int, float)) and re.fullmatch(r"[0-9]+(?:\.[0-9]{1,2})?(?: บาท)?", str(value)):
+        return value
+    return None
+
+
 def run_api_booking(args):
+    if args.book and Path(str(args.session) + ".pending-booking.json").exists():
+        raise RuntimeError("มีผลยืนยันจองที่ยังไม่ชัดเจน ห้ามส่งซ้ำก่อนตรวจรายการจอง")
     session = load_session(args.session)
     booker = session["booker_id"]
     rating = session["rating_payload"]
@@ -326,24 +336,60 @@ def run_api_booking(args):
         confirmation = api.request("POST", BASE + "/booking/preconfirm", payload, {"lang": "th"})
         if not isinstance(confirmation, dict):
             raise RuntimeError("รูปแบบ preconfirm ไม่ถูกต้อง จึงไม่ส่งยืนยัน")
-        header = confirmation.get("booking_header", {})
-        if not (confirmation.get("is_available") is True
-                and header.get("booking_date", {}).get("value") == args.date.strftime("%d/%m/") + str(args.date.year + 543)
-                and header.get("booking_time", {}).get("value") == slot["START_TIME"][:5] + " น."
-                and header.get("price", {}).get("value") == "ไม่มี"
-                and confirmation.get("booking_detail", {}).get("booking_title", {}).get("value") == payload["BOOKING_TITLE"]):
-            raise RuntimeError("ข้อมูล preconfirm ไม่ตรง หรือไม่ใช่การจองฟรี จึงไม่ส่งยืนยัน")
+        try:
+            header = confirmation.get("booking_header", {})
+            price = header.get("price", {}).get("value")
+            checks = {
+                "availability": confirmation.get("is_available") is True,
+                "date": header.get("booking_date", {}).get("value") == args.date.strftime("%d/%m/") + str(args.date.year + 543),
+                "time": header.get("booking_time", {}).get("value") == slot["START_TIME"][:5] + " น.",
+                "court_title": confirmation.get("booking_detail", {}).get("booking_title", {}).get("value") == payload["BOOKING_TITLE"],
+                "free_price": getattr(args, "allow_paid", False) or price == "ไม่มี",
+            }
+            expected = {**payload, "CENTER_ID": center["ID"], "ITEM_ID": court["ID"]}
+            for data in (confirmation, confirmation.get("booking_data", {})):
+                checks["identifiers"] = checks.get("identifiers", True) and all(
+                    data[key] == value for key, value in expected.items() if key in data
+                )
+            failed = [key for key, valid in checks.items() if not valid]
+        except (AttributeError, TypeError):
+            raise RuntimeError("รูปแบบ preconfirm ไม่ถูกต้อง จึงไม่ส่งยืนยัน") from None
+        if failed:
+            status("Booking result=preconfirm_rejected checks=%s amount=%s payment_status=unknown",
+                   ",".join(failed), booking_amount(price))
+            raise RuntimeError("ข้อมูล preconfirm ไม่ตรง จึงไม่ส่งยืนยัน: " + ",".join(failed))
+
+        # Persist before POST: a lost response must also block retries after restart.
+        pending = Path(str(args.session) + ".pending-booking.json")
+        try:
+            with pending.open("x", encoding="utf-8") as marker:
+                json.dump({"date": day, "court_id": court["ID"], "slot_id": slot["ID"]}, marker)
+                marker.flush()
+                os.fsync(marker.fileno())
+        except FileExistsError:
+            raise RuntimeError("มีผลยืนยันจองที่ยังไม่ชัดเจน ห้ามส่งซ้ำก่อนตรวจรายการจอง") from None
         try:
             booked = api.request("POST", BASE + "/booking", payload, {"lang": "th"})
             if not isinstance(booked, dict):
                 raise RuntimeError("รูปแบบผลยืนยันการจองไม่ถูกต้อง")
             data = booked.get("booking_data", {})
-            if not (booked.get("is_book") is True and data.get("BOOKING_STATUS") == "CONFIRMED"
-                    and data.get("BOOKING_DATE") == day and data.get("SLOT_ID") == slot["ID"]):
+            if not (isinstance(data, dict) and booked.get("is_book") is True
+                    and data.get("BOOKING_STATUS") == "CONFIRMED"
+                    and data.get("BOOKING_DATE") == day and data.get("SLOT_ID") == slot["ID"]
+                    and all(data[key] == value for key, value in expected.items() if key in data)):
                 raise RuntimeError("ผลยืนยันการจองไม่ครบหรือไม่ตรง")
-        except (OSError, http.client.HTTPException, ValueError, RuntimeError) as error:
-            raise RuntimeError("ส่งยืนยันจองแล้วแต่ผลยังไม่ชัดเจน ห้ามส่งซ้ำก่อนตรวจรายการจอง") from error
+        except (OSError, http.client.HTTPException, ValueError, RuntimeError):
+            status("Booking result=confirmation_unknown amount=%s payment_status=unknown", booking_amount(price))
+            raise RuntimeError("ส่งยืนยันจองแล้วแต่ผลยังไม่ชัดเจน ห้ามส่งซ้ำก่อนตรวจรายการจอง") from None
+        pending.unlink()
         result["outcome"] = "booked"
+        # Only log parsed monetary values and known statuses, never raw API text.
+        amount = booking_amount(data.get("PRICE", price))
+        payment = data.get("PAYMENT_STATUS")
+        if payment not in ("PAID", "UNPAID", "PENDING", "NOT_REQUIRED"):
+            payment = "unknown"
+        result.update(amount=amount, payment_status=payment)
+        status("Booking result=booked amount=%s payment_status=%s", amount, payment)
         status("API ยืนยันจองสำเร็จ %s %s", court["NAME"], interval)
         # A review failure must never obscure the confirmed booking or retry it.
         try:
@@ -352,9 +398,9 @@ def run_api_booking(args):
             )
             if not isinstance(response, dict) or response.get("status") != "create success":
                 raise RuntimeError("API ยังไม่ยืนยันผลรีวิว")
-        except (OSError, http.client.HTTPException, ValueError, RuntimeError) as error:
+        except (OSError, http.client.HTTPException, ValueError, RuntimeError):
             result["review"] = "failed"
-            LOGGER.warning("จองสำเร็จแล้ว แต่ส่งรีวิวไม่สำเร็จ: %s", error)
+            LOGGER.warning("จองสำเร็จแล้ว แต่ส่งรีวิวไม่สำเร็จ")
         else:
             result["review"] = "submitted"
             status("ส่งรีวิวผ่าน API สำเร็จ")

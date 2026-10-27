@@ -1,3 +1,4 @@
+from copy import deepcopy
 from datetime import date
 import json
 import os
@@ -6,6 +7,8 @@ import tempfile
 from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
+
+import open_booking_api as cli
 
 from bkk_active.api_booking import (
     BASE,
@@ -20,7 +23,9 @@ from bkk_active.api_booking import (
 
 class ApiBookingTests(unittest.TestCase):
     def setUp(self):
-        self.args = SimpleNamespace(session="session.json", center="ศูนย์กีฬาเบญจกิติ",
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        self.args = SimpleNamespace(session=str(Path(folder.name) / "session.json"), center="ศูนย์กีฬาเบญจกิติ",
                                     date=date(2026, 10, 21), start_minute=420, end_minute=480, book=False)
         self.slot = {"ID": "slot-7", "START_TIME": "07:00:00", "END_TIME": "08:00:00",
                      "IS_FULL": False, "REMAINING": 1}
@@ -58,6 +63,15 @@ class ApiBookingTests(unittest.TestCase):
                 patch("bkk_active.api_booking.BookingApi", return_value=api):
             return run_api_booking(self.args)
 
+    def test_cli_paid_flag_is_opt_in(self):
+        for flags, expected in (([], False), (["--allow-paid"], True)):
+            with self.subTest(flags=flags), patch("sys.argv", ["open_booking_api.py",
+                    "--session", "session.json", "--booking-day", "today",
+                    "--start-time", "07:00", "--end-time", "08:00", "--book", *flags]), \
+                    patch.object(cli, "run_once") as run:
+                cli.main()
+                self.assertIs(run.call_args.args[0].allow_paid, expected)
+
     def test_preview_never_posts(self):
         api = self.setup_api()
         api.request.return_value = [self.slot]
@@ -77,6 +91,89 @@ class ApiBookingTests(unittest.TestCase):
             ("POST", BASE + "/booking"), ("POST", "/rating/api/rating")])
         self.assertEqual(calls[1].args[2], calls[2].args[2])
         self.assertEqual(calls[2].args[2]["SLOT_ID"], "slot-7")
+
+    def test_paid_booking_requires_flag_and_logs_safe_result(self):
+        for allow_paid in (False, True):
+            with self.subTest(allow_paid=allow_paid):
+                self.args.book = True
+                self.args.allow_paid = allow_paid
+                self.confirmation["booking_header"]["price"]["value"] = "100.00 บาท"
+                self.booked["booking_data"]["PAYMENT_STATUS"] = "UNPAID"
+                self.booked["token"] = "secret-response-token"
+                api = self.setup_api()
+                api.request.side_effect = [[self.slot], self.confirmation, self.booked, {"status": "create success"}]
+                with self.assertLogs("bkk-active", level="INFO") as logs:
+                    if allow_paid:
+                        result = self.run_with(api)
+                        self.assertEqual((result["outcome"], result["amount"], result["payment_status"]),
+                                         ("booked", "100.00 บาท", "UNPAID"))
+                    else:
+                        with self.assertRaisesRegex(RuntimeError, "free_price"):
+                            self.run_with(api)
+                        self.assertEqual(api.request.call_count, 2)
+                self.assertNotIn("secret-response-token", "\n".join(logs.output))
+
+    def test_flag_still_allows_free_booking(self):
+        self.args.book = self.args.allow_paid = True
+        api = self.setup_api()
+        api.request.side_effect = [[self.slot], self.confirmation, self.booked, {"status": "create success"}]
+        self.assertEqual(self.run_with(api)["amount"], "0")
+
+    def test_paid_flag_preserves_every_preconfirm_check(self):
+        self.args.book = self.args.allow_paid = True
+        for section, field, value in (
+            ("booking_header", "booking_date", "wrong"),
+            ("booking_header", "booking_time", "wrong"),
+            ("booking_detail", "booking_title", "wrong"),
+            (None, "is_available", False),
+            (None, "CENTER_ID", "wrong"),
+            (None, "ITEM_ID", "wrong"),
+            (None, "SLOT_ID", "wrong"),
+            (None, "BOOKER_ID", "wrong"),
+            ("booking_data", "SLOT_ID", "wrong"),
+        ):
+            with self.subTest(field=field):
+                confirmation = deepcopy(self.confirmation)
+                if section in ("booking_header", "booking_detail"):
+                    confirmation[section][field]["value"] = value
+                elif section:
+                    confirmation[section] = {field: value}
+                else:
+                    confirmation[field] = value
+                api = self.setup_api()
+                api.request.side_effect = [[self.slot], confirmation]
+                with self.assertRaisesRegex(RuntimeError, "preconfirm"):
+                    self.run_with(api)
+                self.assertEqual(api.request.call_count, 2)
+
+    def test_bad_final_confirmation_never_reports_success_and_blocks_restart(self):
+        self.args.book = True
+        for response in ({}, {"is_book": False}, [], {**self.booked, "booking_data": None},
+                         {**self.booked, "booking_data": {**self.booked["booking_data"], "SLOT_ID": "wrong"}},
+                         {**self.booked, "booking_data": {**self.booked["booking_data"], "BOOKER_ID": "wrong"}}):
+            with self.subTest(response=response):
+                api = self.setup_api()
+                api.request.side_effect = [[self.slot], self.confirmation, response]
+                with self.assertLogs("bkk-active", level="INFO") as logs:
+                    with self.assertRaisesRegex(RuntimeError, "ห้ามส่งซ้ำ"):
+                        self.run_with(api)
+                self.assertNotIn("result=booked", "\n".join(logs.output))
+                self.assertEqual(api.request.call_count, 3)
+                retry = self.setup_api()
+                with self.assertRaisesRegex(RuntimeError, "ห้ามส่งซ้ำ"):
+                    self.run_with(retry)
+                retry.request.assert_not_called()
+                Path(self.args.session + ".pending-booking.json").unlink()
+
+    def test_sensitive_amount_and_payment_values_are_not_logged(self):
+        self.args.book = True
+        self.booked["booking_data"].update(PRICE="Bearer secret", PAYMENT_STATUS="secret-token")
+        api = self.setup_api()
+        api.request.side_effect = [[self.slot], self.confirmation, self.booked, {"status": "create success"}]
+        with self.assertLogs("bkk-active", level="INFO") as logs:
+            result = self.run_with(api)
+        self.assertEqual((result["amount"], result["payment_status"]), (None, "unknown"))
+        self.assertNotIn("secret", "\n".join(logs.output))
 
     def test_wrong_confirmation_stops_before_booking(self):
         self.args.book = True

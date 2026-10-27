@@ -181,6 +181,11 @@ def main():
         help="ส่งจองจริง (ค่าเริ่มต้นเป็น Preview)"
     )
 
+    parser.add_argument(
+        "--allow-paid", action="store_true",
+        help="อนุญาตการจองที่มีค่าบริการด้วย (ชำระเงินเองภายหลัง)"
+    )
+
     args = parser.parse_args()
 
     if args.date and args.booking_day:

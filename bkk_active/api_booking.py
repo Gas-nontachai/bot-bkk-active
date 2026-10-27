@@ -1,4 +1,6 @@
 """Book through the observed reservation API using a locally captured session."""
+from concurrent.futures import CancelledError, ThreadPoolExecutor, as_completed
+from contextlib import nullcontext
 from datetime import datetime
 from email.utils import parsedate_to_datetime
 import http.client
@@ -8,6 +10,7 @@ from pathlib import Path
 import re
 import tempfile
 import time
+import threading
 from urllib.parse import quote, urlencode, urlsplit
 
 from .logging_setup import LOGGER, status
@@ -212,7 +215,7 @@ def named(items, name):
     return matches[0]
 
 
-def find_center(api, name):
+def find_center(api, name, *, metrics=None):
     started = time.monotonic()
     deadline = started + 5
     attempts = 0
@@ -257,6 +260,8 @@ def find_center(api, name):
             remaining = deadline - time.monotonic()
             if delay >= remaining:
                 break
+            if metrics is not None:
+                metrics["retries"].append(reason)
             time.sleep(delay)
         raise RuntimeError(f"ค้นหาศูนย์ไม่สำเร็จภายใน 5 วินาที: {name}")
     finally:
@@ -294,31 +299,206 @@ def booking_amount(value):
     return None
 
 
+# Synchronize accounts even when callers use different session files in this process.
+_ACCOUNT_GUARD = threading.Lock()
+_ACCOUNT_LOCKS = {}
+_BOOKED_DATES = set()
+_PENDING_BOOKINGS = {}
+
+
+def _event(metrics, event, **fields):
+    status("API performance %s", json.dumps({
+        "event": event, "date": metrics["date"], "elapsed_ms": round((time.perf_counter() - metrics["started"]) * 1000, 3),
+        **fields,
+    }, ensure_ascii=False))
+
+
+def _wait_rate_limit(metrics, stop=None):
+    deadline = time.monotonic() + 5
+    while True:
+        with metrics["rate_lock"]:
+            delay = metrics["retry_at"] - time.monotonic()
+        if delay <= 0:
+            return
+        if delay > deadline - time.monotonic():
+            raise ApiHttpError("API rate limit exceeds retry budget", 429)
+        if stop is None:
+            time.sleep(delay)
+        elif stop.wait(delay):
+            raise CancelledError()
+
+
+def _retry(metrics, operation, *args, _stop=None, **kwargs):
+    for attempt in range(3):
+        if _stop is not None and _stop.is_set():
+            raise CancelledError()
+        _wait_rate_limit(metrics, _stop)
+        try:
+            return operation(*args, **kwargs)
+        except (OSError, http.client.HTTPException, ApiHttpError) as error:
+            if _stop is not None and _stop.is_set():
+                raise CancelledError() from None
+            if isinstance(error, ApiHttpError) and error.status not in (408, 429, 500, 502, 503, 504):
+                raise
+            reason = f"http_{error.status}" if isinstance(error, ApiHttpError) else type(error).__name__
+            delay = 0.5 * 2 ** attempt
+            if isinstance(error, ApiHttpError) and error.retry_after:
+                try:
+                    delay = max(delay, float(error.retry_after))
+                except ValueError:
+                    try:
+                        delay = max(delay, parsedate_to_datetime(error.retry_after).timestamp() - time.time())
+                    except (TypeError, ValueError, OverflowError):
+                        pass
+            if isinstance(error, ApiHttpError) and error.status == 429:
+                with metrics["rate_lock"]:
+                    metrics["retry_at"] = max(metrics["retry_at"], time.monotonic() + delay)
+            _event(metrics, "request_error", error_class=reason, attempt=attempt + 1)
+            if attempt == 2 or delay > 5:
+                raise
+            metrics["retries"].append(reason)
+            if _stop is None:
+                time.sleep(delay)
+            elif _stop.wait(delay):
+                raise CancelledError()
+
+
+def _confirmed(data, day, slot_id, expected):
+    return (isinstance(data, dict) and data.get("BOOKING_STATUS") == "CONFIRMED"
+            and data.get("BOOKING_DATE") == day and data.get("SLOT_ID") == slot_id
+            and all(data[key] == value for key, value in expected.items() if key in data))
+
+
+def _reconcile(api, booker, marker, metrics):
+    if (not isinstance(marker, dict)
+            or any(not isinstance(marker.get(key), str) or not marker[key]
+                   for key in ("date", "court_id", "slot_id"))):
+        raise RuntimeError("รูปแบบ pending marker ไม่ถูกต้อง ห้ามส่งซ้ำก่อนตรวจรายการจอง")
+    bookings = _retry(metrics, api.bookings, booker)
+    for booking in bookings:
+        slot = booking.get("SLOT") or {}
+        if not isinstance(slot, dict):
+            raise RuntimeError("รูปแบบรายการจองจาก API ไม่ถูกต้อง")
+        if slot.get("ITEM_ID", marker["court_id"]) != marker["court_id"]:
+            continue
+        slot_id = booking.get("SLOT_ID", slot.get("ID"))
+        if booking.get("BOOKING_DATE") != marker["date"] or slot_id != marker["slot_id"]:
+            continue
+        if _confirmed({**booking, "SLOT_ID": slot_id}, marker["date"], marker["slot_id"],
+                      {"BOOKER_ID": booker, "ITEM_ID": marker["court_id"]}):
+            return booking
+    # An empty listing may be eventually consistent; it cannot prove a POST failed.
+    return None
+
+
 def run_api_booking(args):
-    if args.book and Path(str(args.session) + ".pending-booking.json").exists():
-        raise RuntimeError("มีผลยืนยันจองที่ยังไม่ชัดเจน ห้ามส่งซ้ำก่อนตรวจรายการจอง")
-    session = load_session(args.session)
+    metrics = {"started": time.perf_counter(), "retries": [], "outcome": "error",
+               "rate_lock": threading.Lock(), "retry_at": 0, "date": args.date.isoformat()}
+    scheduled = getattr(args, "scheduled_at", None)
+    _event(metrics, "execution_started", scheduled_at=scheduled.isoformat() if scheduled else None)
+    try:
+        session = getattr(args, "prepared_session", None) or load_session(args.session)
+        booker = session["booker_id"]
+        with _ACCOUNT_GUARD:
+            lock = _ACCOUNT_LOCKS.setdefault(booker, threading.Lock())
+        with lock if args.book else nullcontext():
+            key = (booker, args.date.isoformat())
+            if key in _BOOKED_DATES:
+                result = {"outcome": "already_booked", "date": key[1]}
+            else:
+                result = _run_api_booking(args, session, metrics)
+            if args.book and result["outcome"] in ("booked", "already_booked"):
+                _BOOKED_DATES.add(key)
+            metrics["outcome"] = result["outcome"]
+            return result
+    except Exception as error:
+        _event(metrics, "execution_error", error_class=type(error).__name__)
+        raise
+    finally:
+        _event(metrics, "execution_finished", outcome=metrics["outcome"], retry_count=len(metrics["retries"]))
+
+
+def _availability(api, courts, day, metrics):
+    pool = ThreadPoolExecutor(max_workers=len(courts))
+    futures = {}
+    stop = threading.Event()
+    _event(metrics, "availability_started", concurrent_requests=len(courts))
+    try:
+        for court in courts:
+            future = pool.submit(_retry, metrics, api.request, "GET",
+                                 BASE + "/item/" + quote(court["ID"], safe="") + "/slot",
+                                 query={"BOOKING_DATE": day}, timeout=5, _stop=stop)
+            futures[future] = court
+        first = True
+        for future in as_completed(futures):
+            if first:
+                _event(metrics, "first_availability_response")
+                first = False
+            try:
+                slots = future.result()
+            except (OSError, http.client.HTTPException, RuntimeError, ValueError) as error:
+                yield futures[future], None, error
+            else:
+                yield futures[future], slots, None
+    finally:
+        stop.set()
+        for future in futures:
+            future.cancel()
+        # Running reads have a deadline; booking must not wait for slower courts.
+        pool.shutdown(wait=False, cancel_futures=True)
+
+
+def _run_api_booking(args, session, metrics):
     booker = session["booker_id"]
-    rating = session["rating_payload"]
     api = BookingApi(session["booking_bearer_token"])
-    center = find_center(api, args.center)
-    activity = named(api.items(center["ID"]), "สนามแบดมินตัน")
-    courts = [item for item in api.items(activity["ID"])
+    pending = _PENDING_BOOKINGS.get(booker, Path(str(args.session) + ".pending-booking.json"))
+    if args.book and pending.exists():
+        marker = json.loads(pending.read_text(encoding="utf-8"))
+        reconciled = _reconcile(api, booker, marker, metrics)
+        if reconciled is None:
+            metrics["outcome"] = "confirmation_unknown"
+            raise RuntimeError("มีผลยืนยันจองที่ยังไม่ชัดเจน ห้ามส่งซ้ำก่อนตรวจรายการจอง")
+        pending.unlink()
+        _PENDING_BOOKINGS.pop(booker, None)
+        if marker["date"] == args.date.isoformat():
+            return {"outcome": "already_booked", "date": marker["date"]}
+    discovery_started = time.perf_counter()
+    center = find_center(api, args.center, metrics=metrics)
+    activity = named(_retry(metrics, api.items, center["ID"], timeout=5), "สนามแบดมินตัน")
+    courts = [item for item in _retry(metrics, api.items, activity["ID"], timeout=5)
               if re.fullmatch(r"แบดมินตัน สนาม [1-7]", item.get("NAME", ""))]
+    if any(not isinstance(court.get("ID"), str) or not court["ID"] for court in courts):
+        raise RuntimeError("API ส่งสนามที่ไม่มี ID")
+    courts = list({court["ID"]: court for court in courts}.values())
+    _event(metrics, "court_discovery", duration_ms=round((time.perf_counter() - discovery_started) * 1000, 3),
+           courts=len(courts))
     if not courts:
         raise RuntimeError("API ไม่พบสนามแบดมินตัน 1–7")
     day = args.date.isoformat()
-    court_ids = {court["ID"] for court in courts}
-    for booking in api.bookings(booker):
-        slot = booking.get("SLOT", {})
-        if (booking.get("BOOKING_DATE") == day and booking.get("BOOKING_STATUS") != "CANCELLED"
-                and slot.get("ITEM_ID") in court_ids
-                and args.start_minute <= minute(slot["START_TIME"]) < minute(slot["END_TIME"]) <= args.end_minute):
-            status("มีรายการจองช่วงนี้อยู่แล้ว จึงไม่ส่งจองเพิ่ม")
+    for booking in _retry(metrics, api.bookings, booker):
+        if booking.get("BOOKING_DATE") == day and booking.get("BOOKING_STATUS") != "CANCELLED":
+            status("มีรายการจองวันนี้อยู่แล้ว จึงไม่ส่งจองเพิ่ม")
             return {"outcome": "already_booked", "date": day}
-    for court in courts:
-        slots = api.request("GET", BASE + "/item/" + quote(court["ID"], safe="") + "/slot",
-                            query={"BOOKING_DATE": day})
+    availability = _availability(api, courts, day, metrics)
+    try:
+        return _consume_availability(args, session, api, center, activity, availability, metrics)
+    finally:
+        availability.close()
+
+
+def _consume_availability(args, session, api, center, activity, availability, metrics):
+    day = args.date.isoformat()
+    booker, rating = session["booker_id"], session["rating_payload"]
+    pending = _PENDING_BOOKINGS.get(booker, Path(str(args.session) + ".pending-booking.json"))
+    first_eligible = True
+    first_booking = True
+    last_error = None
+    for court, slots, error in availability:
+        if error is not None:
+            if isinstance(error, ApiHttpError) and error.status in (401, 403, 429):
+                raise error
+            last_error = error
+            continue
         if not isinstance(slots, list):
             raise RuntimeError("รูปแบบช่องเวลาจาก API ไม่ถูกต้อง")
         slot = choose_slot(slots, args.start_minute, args.end_minute)
@@ -331,9 +511,17 @@ def run_api_booking(args):
         result = {"outcome": "available", "center": args.center, "court": court["NAME"],
                   "date": day, "interval": interval, "court_id": court["ID"], "slot_id": slot["ID"]}
         if not args.book:
+            _event(metrics, "first_eligible_court")
             status("โหมดตรวจสอบเท่านั้น ยังไม่ได้ส่ง preconfirm หรือยืนยันจอง")
             return result
-        confirmation = api.request("POST", BASE + "/booking/preconfirm", payload, {"lang": "th"})
+        try:
+            confirmation = _retry(metrics, api.request, "POST", BASE + "/booking/preconfirm",
+                                  payload, {"lang": "th"}, timeout=5)
+        except ApiHttpError as error:
+            if error.status in (401, 403):
+                raise
+            last_error = error
+            continue
         if not isinstance(confirmation, dict):
             raise RuntimeError("รูปแบบ preconfirm ไม่ถูกต้อง จึงไม่ส่งยืนยัน")
         try:
@@ -357,10 +545,15 @@ def run_api_booking(args):
         if failed:
             status("Booking result=preconfirm_rejected checks=%s amount=%s payment_status=unknown",
                    ",".join(failed), booking_amount(price))
+            if set(failed) <= {"availability", "free_price"}:
+                continue
             raise RuntimeError("ข้อมูล preconfirm ไม่ตรง จึงไม่ส่งยืนยัน: " + ",".join(failed))
 
+        if first_eligible:
+            _event(metrics, "first_eligible_court")
+            first_eligible = False
+        _wait_rate_limit(metrics)
         # Persist before POST: a lost response must also block retries after restart.
-        pending = Path(str(args.session) + ".pending-booking.json")
         try:
             with pending.open("x", encoding="utf-8") as marker:
                 json.dump({"date": day, "court_id": court["ID"], "slot_id": slot["ID"]}, marker)
@@ -368,20 +561,48 @@ def run_api_booking(args):
                 os.fsync(marker.fileno())
         except FileExistsError:
             raise RuntimeError("มีผลยืนยันจองที่ยังไม่ชัดเจน ห้ามส่งซ้ำก่อนตรวจรายการจอง") from None
+        _PENDING_BOOKINGS[booker] = pending
+        booking_started = time.perf_counter()
+        if first_booking:
+            scheduled = getattr(args, "scheduled_at", None)
+            _event(metrics, "first_booking_request", ms_after_scheduled=(
+                round((datetime.now(scheduled.tzinfo) - scheduled).total_seconds() * 1000, 3)
+                if scheduled else None))
+            first_booking = False
         try:
-            booked = api.request("POST", BASE + "/booking", payload, {"lang": "th"})
-            if not isinstance(booked, dict):
-                raise RuntimeError("รูปแบบผลยืนยันการจองไม่ถูกต้อง")
-            data = booked.get("booking_data", {})
-            if not (isinstance(data, dict) and booked.get("is_book") is True
-                    and data.get("BOOKING_STATUS") == "CONFIRMED"
-                    and data.get("BOOKING_DATE") == day and data.get("SLOT_ID") == slot["ID"]
-                    and all(data[key] == value for key, value in expected.items() if key in data)):
+            booked = api.request("POST", BASE + "/booking", payload, {"lang": "th"}, timeout=20)
+            if isinstance(booked, dict) and booked.get("is_book") is False and not booked.get("booking_data"):
+                pending.unlink()
+                _PENDING_BOOKINGS.pop(booker, None)
+                _event(metrics, "booking_response", outcome="rejected",
+                       latency_ms=round((time.perf_counter() - booking_started) * 1000, 3))
+                continue
+            data = booked.get("booking_data") if isinstance(booked, dict) else None
+            if not (isinstance(booked, dict) and booked.get("is_book") is True
+                    and _confirmed(data, day, slot["ID"], expected)):
                 raise RuntimeError("ผลยืนยันการจองไม่ครบหรือไม่ตรง")
-        except (OSError, http.client.HTTPException, ValueError, RuntimeError):
-            status("Booking result=confirmation_unknown amount=%s payment_status=unknown", booking_amount(price))
-            raise RuntimeError("ส่งยืนยันจองแล้วแต่ผลยังไม่ชัดเจน ห้ามส่งซ้ำก่อนตรวจรายการจอง") from None
-        pending.unlink()
+        except (OSError, http.client.HTTPException, ValueError, RuntimeError) as error:
+            _event(metrics, "booking_response", outcome="unknown", error_class=type(error).__name__,
+                   latency_ms=round((time.perf_counter() - booking_started) * 1000, 3))
+            metrics["outcome"] = "confirmation_unknown"
+            try:
+                data = _reconcile(api, booker, {"date": day, "court_id": court["ID"], "slot_id": slot["ID"]}, metrics)
+            except (OSError, http.client.HTTPException, ValueError, RuntimeError):
+                data = None
+            if data is None:
+                status("Booking result=confirmation_unknown amount=%s payment_status=unknown", booking_amount(price))
+                raise RuntimeError("ส่งยืนยันจองแล้วแต่ผลยังไม่ชัดเจน ห้ามส่งซ้ำก่อนตรวจรายการจอง") from None
+            _event(metrics, "booking_reconciled", outcome="booked")
+        else:
+            _event(metrics, "booking_response", outcome="booked",
+                   latency_ms=round((time.perf_counter() - booking_started) * 1000, 3))
+        _BOOKED_DATES.add((booker, day))
+        try:
+            pending.unlink()
+        except OSError:
+            LOGGER.warning("จองสำเร็จแล้ว แต่ยังลบ pending marker ไม่สำเร็จ")
+        else:
+            _PENDING_BOOKINGS.pop(booker, None)
         result["outcome"] = "booked"
         # Only log parsed monetary values and known statuses, never raw API text.
         amount = booking_amount(data.get("PRICE", price))
@@ -405,5 +626,7 @@ def run_api_booking(args):
             result["review"] = "submitted"
             status("ส่งรีวิวผ่าน API สำเร็จ")
         return result
-    status("ไม่พบช่องว่างในช่วงเวลาที่ระบุครบทั้ง 7 สนาม")
+    if last_error is not None:
+        raise last_error
+    status("ไม่พบช่องว่างที่เข้าเงื่อนไขในช่วงเวลาที่ระบุ")
     return {"outcome": "no_available_slot", "date": day}

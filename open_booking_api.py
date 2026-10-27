@@ -11,7 +11,7 @@ import sys
 import time as time_module
 from zoneinfo import ZoneInfo
 
-from bkk_active.api_booking import run_api_booking
+from bkk_active.api_booking import load_session, run_api_booking
 from bkk_active.cli import parse_booking_time
 from bkk_active.logging_setup import configure_logging, LOGGER, status
 from bkk_active.run_artifacts import RunArtifacts
@@ -123,10 +123,19 @@ def run_schedule(args):
 
         status("รอบถัดไป: %s", target.isoformat())
 
-        time_module.sleep(wait_seconds)
+        time_module.sleep(max(0, wait_seconds - 30))
+        execution_args = copy(args)
+        execution_args.scheduled_at = target
+        try:
+            if getattr(args, "session", None):
+                execution_args.prepared_session = load_session(args.session)
+                status("API preparation result=ready scheduled_at=%s", target.isoformat())
+        except (OSError, RuntimeError, ValueError):
+            LOGGER.exception("เตรียม session ไม่สำเร็จ จะตรวจอีกครั้งเมื่อถึงเวลารัน")
+        time_module.sleep(max(0, (target - datetime.now(TZ)).total_seconds()))
 
         try:
-            result = run_once(args)
+            result = run_once(execution_args)
             status("ผลการทำงาน: %s", result["outcome"])
         except Exception:
             LOGGER.exception("บอต API ทำงานไม่สำเร็จ จะรอรอบถัดไป")

@@ -6,3 +6,4 @@ logger/
 session.json
 .venv-api/
 .api-capture/
+*.pending-booking.json

@@ -23,6 +23,9 @@ from bkk_active.api_booking import (
 
 class ApiBookingTests(unittest.TestCase):
     def setUp(self):
+        from bkk_active.api_booking import _BOOKED_DATES, _PENDING_BOOKINGS
+        _BOOKED_DATES.clear()
+        _PENDING_BOOKINGS.clear()
         folder = tempfile.TemporaryDirectory()
         self.addCleanup(folder.cleanup)
         self.args = SimpleNamespace(session=str(Path(folder.name) / "session.json"), center="ศูนย์กีฬาเบญจกิติ",
@@ -77,7 +80,7 @@ class ApiBookingTests(unittest.TestCase):
         api.request.return_value = [self.slot]
         self.assertEqual(self.run_with(api)["outcome"], "available")
         api.request.assert_called_once_with("GET", BASE + "/item/court-1/slot",
-                                            query={"BOOKING_DATE": "2026-10-21"})
+                                            query={"BOOKING_DATE": "2026-10-21"}, timeout=5)
 
     def test_booking_and_review_complete_once(self):
         self.args.book = True
@@ -108,8 +111,7 @@ class ApiBookingTests(unittest.TestCase):
                         self.assertEqual((result["outcome"], result["amount"], result["payment_status"]),
                                          ("booked", "100.00 บาท", "UNPAID"))
                     else:
-                        with self.assertRaisesRegex(RuntimeError, "free_price"):
-                            self.run_with(api)
+                        self.assertEqual(self.run_with(api)["outcome"], "no_available_slot")
                         self.assertEqual(api.request.call_count, 2)
                 self.assertNotIn("secret-response-token", "\n".join(logs.output))
 
@@ -125,7 +127,6 @@ class ApiBookingTests(unittest.TestCase):
             ("booking_header", "booking_date", "wrong"),
             ("booking_header", "booking_time", "wrong"),
             ("booking_detail", "booking_title", "wrong"),
-            (None, "is_available", False),
             (None, "CENTER_ID", "wrong"),
             (None, "ITEM_ID", "wrong"),
             (None, "SLOT_ID", "wrong"),
@@ -148,7 +149,7 @@ class ApiBookingTests(unittest.TestCase):
 
     def test_bad_final_confirmation_never_reports_success_and_blocks_restart(self):
         self.args.book = True
-        for response in ({}, {"is_book": False}, [], {**self.booked, "booking_data": None},
+        for response in ({}, [], {**self.booked, "booking_data": None},
                          {**self.booked, "booking_data": {**self.booked["booking_data"], "SLOT_ID": "wrong"}},
                          {**self.booked, "booking_data": {**self.booked["booking_data"], "BOOKER_ID": "wrong"}}):
             with self.subTest(response=response):

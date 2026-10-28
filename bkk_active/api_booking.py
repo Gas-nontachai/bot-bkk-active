@@ -12,6 +12,7 @@ import tempfile
 import time
 import threading
 from urllib.parse import quote, urlencode, urlsplit
+from uuid import uuid4
 
 from .logging_setup import LOGGER, status
 
@@ -145,8 +146,9 @@ class ApiHttpError(RuntimeError):
 
 
 class BookingApi:
-    def __init__(self, bearer_token):
+    def __init__(self, bearer_token, *, events=None):
         self.headers = {"authorization": bearer_token}
+        self.events = events
 
     def request(self, method, path, payload=None, query=None, *, timeout=None):
         deadline = time.monotonic() + timeout if timeout is not None else None
@@ -157,6 +159,17 @@ class BookingApi:
             headers["Content-Type"] = "application/json"
             body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         target = path + ("?" + urlencode(query) if query else "")
+        flow_id = uuid4().hex if self.events is not None else None
+        started = time.perf_counter()
+        response_logged = False
+        if self.events is not None:
+            self.events.write({"event": "request", "flow_id": flow_id, "method": method,
+                               "url": "https://" + HOST + target,
+                               "headers": {"Host": HOST, "Accept-Encoding": "identity",
+                                           **({"Content-Length": str(len(body))} if body is not None
+                                              else {"Content-Length": "0"} if method in ("POST", "PUT", "PATCH") else {}),
+                                           **headers},
+                               "body": payload, "body_bytes": len(body or b"")})
         try:
             connection.request(method, target, body=body, headers=headers)
             if deadline is None:
@@ -180,6 +193,10 @@ class BookingApi:
                         break
                     chunks.append(chunk)
                 data = b"".join(chunks)
+            if self.events is not None:
+                self.events.response(flow_id, response, data,
+                                     round((time.perf_counter() - started) * 1000, 3))
+                response_logged = True
             LOGGER.info("API %s %s: HTTP %d", method, path, response.status)
             if response.status in (401, 403):
                 raise ApiHttpError("API ไม่อนุญาตให้เข้าถึง: session อาจหมดอายุ ให้จับ raw log ใหม่",
@@ -191,6 +208,13 @@ class BookingApi:
                 raise ApiHttpError(f"API {method} {path}: HTTP {response.status}",
                                    response.status, response.getheader("Retry-After"))
             return json.loads(data)
+        except Exception as error:
+            if self.events is not None:
+                self.events.write({"event": "error", "flow_id": flow_id,
+                                   "error_class": type(error).__name__, "error": str(error),
+                                   "response_received": response_logged,
+                                   "duration_ms": round((time.perf_counter() - started) * 1000, 3)})
+            raise
         finally:
             connection.close()
 
@@ -450,7 +474,7 @@ def _availability(api, courts, day, metrics):
 
 def _run_api_booking(args, session, metrics):
     booker = session["booker_id"]
-    api = BookingApi(session["booking_bearer_token"])
+    api = BookingApi(session["booking_bearer_token"], events=getattr(args, "api_events", None))
     pending = _PENDING_BOOKINGS.get(booker, Path(str(args.session) + ".pending-booking.json"))
     if args.book and pending.exists():
         marker = json.loads(pending.read_text(encoding="utf-8"))
@@ -614,7 +638,7 @@ def _consume_availability(args, session, api, center, activity, availability, me
         status("API ยืนยันจองสำเร็จ %s %s", court["NAME"], interval)
         # A review failure must never obscure the confirmed booking or retry it.
         try:
-            response = BookingApi(session["review_bearer_token"]).request(
+            response = BookingApi(session["review_bearer_token"], events=getattr(args, "api_events", None)).request(
                 "POST", "/rating/api/rating", rating
             )
             if not isinstance(response, dict) or response.get("status") != "create success":

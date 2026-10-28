@@ -4,8 +4,11 @@ import base64
 import json
 from pathlib import Path
 import re
+import threading
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from zoneinfo import ZoneInfo
+
+from .logging_setup import LOGGER
 
 REDACTED = "[REDACTED]"
 SENSITIVE = re.compile(
@@ -149,3 +152,32 @@ class ApiEvents:
                 "unfinished_requests": len(pending),
                 "scope": "proxy traffic; package attribution is unavailable",
                 "http_visible": counts.get("request", 0) > 0}
+
+
+class DirectApiEvents(ApiEvents):
+    """Raw events for direct API calls, including concurrent availability reads."""
+
+    def __init__(self, folder):
+        super().__init__(folder)
+        self.lock = threading.Lock()
+        path = self.folder / "api.jsonl"
+        path.touch(mode=0o600)
+        path.chmod(0o600)
+
+    def write(self, event):
+        # A logging failure after POST must never turn a booking into a retry.
+        try:
+            with self.lock:
+                super().write(event)
+        except OSError:
+            LOGGER.error("บันทึก api.jsonl ไม่สำเร็จ ข้อมูล API รอบนี้อาจไม่ครบ")
+
+    def response(self, flow_id, response, data, duration_ms):
+        event = {"event": "response", "flow_id": flow_id,
+                 "status_code": response.status, "headers": response.getheaders(),
+                 "body_bytes": len(data), "duration_ms": duration_ms}
+        try:
+            event["body"] = json.loads(data)
+        except (ValueError, UnicodeError):
+            event["body_base64"] = base64.b64encode(data).decode("ascii")
+        self.write(event)

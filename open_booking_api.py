@@ -12,6 +12,7 @@ import time as time_module
 from zoneinfo import ZoneInfo
 
 from bkk_active.api_booking import load_session, run_api_booking
+from bkk_active.api_events import DirectApiEvents
 from bkk_active.cli import parse_booking_time
 from bkk_active.logging_setup import configure_logging, LOGGER, status
 from bkk_active.run_artifacts import RunArtifacts
@@ -51,6 +52,7 @@ def run_once(args):
     args = copy(args)
     artifacts = RunArtifacts()
     configure_logging(artifacts.log_file)
+    args.api_events = DirectApiEvents(artifacts.folder)
 
     results = []
     dates = resolve_dates(args)

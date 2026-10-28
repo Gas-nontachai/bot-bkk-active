@@ -241,7 +241,7 @@ def named(items, name):
 
 def find_center(api, name, *, metrics=None):
     started = time.monotonic()
-    deadline = started + 5
+    deadline = started + 30
     attempts = 0
     success = False
     try:
@@ -287,7 +287,7 @@ def find_center(api, name, *, metrics=None):
             if metrics is not None:
                 metrics["retries"].append(reason)
             time.sleep(delay)
-        raise RuntimeError(f"ค้นหาศูนย์ไม่สำเร็จภายใน 5 วินาที: {name}")
+        raise RuntimeError(f"ค้นหาศูนย์ไม่สำเร็จภายใน 30 วินาที: {name}")
     finally:
         status("Center search result=%s attempts=%d elapsed=%.3fs",
                "success" if success else "failure", attempts, time.monotonic() - started)

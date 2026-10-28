@@ -36,7 +36,7 @@ class CenterRetryTests(unittest.TestCase):
         with self.assertLogs("bkk-active", level="INFO") as logs:
             self.assertEqual(find_center(self.api, "target"), self.center)
         self.assertEqual(self.sleeps, [0.5, 0.5])
-        self.assertEqual([call.kwargs["timeout"] for call in self.api.items.call_args_list], [5, 4.5, 4])
+        self.assertEqual([call.kwargs["timeout"] for call in self.api.items.call_args_list], [30, 29.5, 29])
         output = "\n".join(logs.output)
         for text in ("attempt=1 http_status=200 matches=0 reason=no_matches", "result=success attempts=3"):
             self.assertIn(text, output)
@@ -44,11 +44,17 @@ class CenterRetryTests(unittest.TestCase):
     def test_empty_exhausts_window_without_request_at_deadline(self):
         self.api.items.return_value = []
         with self.assertLogs("bkk-active", level="INFO") as logs:
-            with self.assertRaisesRegex(RuntimeError, "5 วินาที"):
+            with self.assertRaisesRegex(RuntimeError, "30 วินาที"):
                 find_center(self.api, "target")
-        self.assertEqual(self.api.items.call_count, 10)
-        self.assertEqual(self.elapsed, 4.5)
-        self.assertIn("result=failure attempts=10", "\n".join(logs.output))
+        self.assertEqual(self.api.items.call_count, 60)
+        self.assertEqual(self.elapsed, 29.5)
+        self.assertIn("result=failure attempts=60", "\n".join(logs.output))
+
+    def test_center_appearing_after_old_deadline_is_found(self):
+        self.api.items.side_effect = [[]] * 12 + [[self.center]]
+        self.assertEqual(find_center(self.api, "target"), self.center)
+        self.assertEqual(self.elapsed, 6)
+        self.assertEqual(self.api.items.call_count, 13)
 
     def test_network_and_temporary_http_errors_retry(self):
         for error in (TimeoutError(), ConnectionResetError(), http.client.RemoteDisconnected(),
@@ -80,7 +86,7 @@ class CenterRetryTests(unittest.TestCase):
                 find_center(self.api, "target")
                 self.assertEqual(self.sleeps[-1], delay)
         self.api.reset_mock()
-        self.api.items.side_effect = [ApiHttpError("limited", 429, "10")]
+        self.api.items.side_effect = [ApiHttpError("limited", 429, "30")]
         with self.assertRaises(RuntimeError):
             find_center(self.api, "target")
         self.assertEqual(self.api.items.call_count, 1)
@@ -92,7 +98,7 @@ class CenterRetryTests(unittest.TestCase):
         self.api.items.side_effect = request
         with self.assertRaises(RuntimeError):
             find_center(self.api, "target")
-        self.assertEqual(self.elapsed, 5)
+        self.assertEqual(self.elapsed, 30)
         self.assertEqual(self.api.items.call_count, 1)
         self.assertEqual(self.sleeps, [])
 

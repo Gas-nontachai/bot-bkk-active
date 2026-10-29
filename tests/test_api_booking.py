@@ -29,7 +29,7 @@ class ApiBookingTests(unittest.TestCase):
         folder = tempfile.TemporaryDirectory()
         self.addCleanup(folder.cleanup)
         self.args = SimpleNamespace(session=str(Path(folder.name) / "session.json"), center="ศูนย์กีฬาเบญจกิติ",
-                                    date=date(2026, 10, 21), start_minute=420, end_minute=480, book=False)
+                                    booking_search_seconds=0.2, date=date(2026, 10, 21), start_minute=420, end_minute=480, book=False)
         self.slot = {"ID": "slot-7", "START_TIME": "07:00:00", "END_TIME": "08:00:00",
                      "IS_FULL": False, "REMAINING": 1}
         self.confirmation = {"is_available": True, "booking_header": {
@@ -164,7 +164,7 @@ class ApiBookingTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, "ห้ามส่งซ้ำ"):
                     self.run_with(retry)
                 retry.request.assert_not_called()
-                Path(self.args.session + ".pending-booking.json").unlink()
+                Path(self.args.session + ".pending-booking.json.court-1").unlink()
 
     def test_sensitive_amount_and_payment_values_are_not_logged(self):
         self.args.book = True

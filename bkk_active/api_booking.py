@@ -544,7 +544,7 @@ def _race_booking(args, session, api, center, activity, courts, metrics):
     def worker(court):
         local = copy(args)
         local.race_stop, local.race_deadline = stop, deadline
-        local.pending_path = Path(pending_base + "." + court["ID"])
+        local.pending_path = None
         local.skip_review = True
         attempted = set()
         previous_availability = None
@@ -682,16 +682,17 @@ def _consume_availability(args, session, api, center, activity, availability, me
             _event(metrics, "first_eligible_court")
             first_eligible = False
         _wait_rate_limit(metrics)
-        # Persist before POST: a lost response must also block retries after restart.
-        try:
-            with pending.open("x", encoding="utf-8") as marker:
-                json.dump({"date": day, "court_id": court["ID"], "slot_id": slot["ID"]}, marker)
-                marker.flush()
-                os.fsync(marker.fileno())
-        except FileExistsError:
-            raise RuntimeError("มีผลยืนยันจองที่ยังไม่ชัดเจน ห้ามส่งซ้ำก่อนตรวจรายการจอง") from None
-        if not hasattr(args, "pending_path"):
-            _PENDING_BOOKINGS[booker] = pending
+        if pending is not None:
+            # Persist before POST: a lost response must also block retries after restart.
+            try:
+                with pending.open("x", encoding="utf-8") as marker:
+                    json.dump({"date": day, "court_id": court["ID"], "slot_id": slot["ID"]}, marker)
+                    marker.flush()
+                    os.fsync(marker.fileno())
+            except FileExistsError:
+                raise RuntimeError("มีผลยืนยันจองที่ยังไม่ชัดเจน ห้ามส่งซ้ำก่อนตรวจรายการจอง") from None
+            if not hasattr(args, "pending_path"):
+                _PENDING_BOOKINGS[booker] = pending
         booking_started = time.perf_counter()
         if first_booking:
             scheduled = getattr(args, "scheduled_at", None)
@@ -702,8 +703,9 @@ def _consume_availability(args, session, api, center, activity, availability, me
         try:
             booked = api.request("POST", BASE + "/booking", payload, {"lang": "th"}, timeout=20)
             if isinstance(booked, dict) and booked.get("is_book") is False and not booked.get("booking_data"):
-                pending.unlink()
-                _PENDING_BOOKINGS.pop(booker, None)
+                if pending is not None:
+                    pending.unlink()
+                    _PENDING_BOOKINGS.pop(booker, None)
                 _event(metrics, "booking_response", outcome="rejected",
                        latency_ms=round((time.perf_counter() - booking_started) * 1000, 3))
                 continue
@@ -727,12 +729,13 @@ def _consume_availability(args, session, api, center, activity, availability, me
             _event(metrics, "booking_response", outcome="booked",
                    latency_ms=round((time.perf_counter() - booking_started) * 1000, 3))
         _BOOKED_DATES.add((booker, day))
-        try:
-            pending.unlink()
-        except OSError:
-            LOGGER.warning("จองสำเร็จแล้ว แต่ยังลบ pending marker ไม่สำเร็จ")
-        else:
-            _PENDING_BOOKINGS.pop(booker, None)
+        if pending is not None:
+            try:
+                pending.unlink()
+            except OSError:
+                LOGGER.warning("จองสำเร็จแล้ว แต่ยังลบ pending marker ไม่สำเร็จ")
+            else:
+                _PENDING_BOOKINGS.pop(booker, None)
         result["outcome"] = "booked"
         # Only log parsed monetary values and known statuses, never raw API text.
         amount = booking_amount(data.get("PRICE", price))

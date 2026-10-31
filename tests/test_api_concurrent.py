@@ -69,6 +69,16 @@ class ConcurrentApiTests(unittest.TestCase):
             release.set()
             finished.wait(timeout=2)
 
+    def test_race_does_not_create_pending_files(self):
+        original = self.response
+        def request(method, path, *args, **kwargs):
+            if path == BASE + "/booking":
+                self.assertFalse(list(Path(self.args.session).parent.glob("*.pending-booking.json*")))
+            return original(method, path, *args, **kwargs)
+        self.api.request.side_effect = request
+        self.assertEqual(self.run_bot()["outcome"], "booked")
+        self.assertFalse(list(Path(self.args.session).parent.glob("*.pending-booking.json*")))
+
     def test_definitive_rejection_attempts_next_court_once(self):
         original = self.response
 

@@ -156,7 +156,7 @@ class ApiBookingTests(unittest.TestCase):
                     self.run_with(api)
                 self.assertEqual(api.request.call_count, 2)
 
-    def test_bad_final_confirmation_never_reports_success_and_blocks_restart(self):
+    def test_bad_final_confirmation_never_reports_success_or_creates_pending_file(self):
         self.args.book = True
         for response in ({}, [], {**self.booked, "booking_data": None},
                          {**self.booked, "booking_data": {**self.booked["booking_data"], "SLOT_ID": "wrong"}},
@@ -169,11 +169,7 @@ class ApiBookingTests(unittest.TestCase):
                         self.run_with(api)
                 self.assertNotIn("result=booked", "\n".join(logs.output))
                 self.assertEqual(api.request.call_count, 3)
-                retry = self.setup_api()
-                with self.assertRaisesRegex(RuntimeError, "ห้ามส่งซ้ำ"):
-                    self.run_with(retry)
-                retry.request.assert_not_called()
-                Path(self.args.session + ".pending-booking.json.court-1").unlink()
+                self.assertFalse(list(Path(self.args.session).parent.glob("*.pending-booking.json*")))
 
     def test_sensitive_amount_and_payment_values_are_not_logged(self):
         self.args.book = True

@@ -82,6 +82,15 @@ class ApiBookingTests(unittest.TestCase):
         api.request.assert_called_once_with("GET", BASE + "/item/court-1/slot",
                                             query={"BOOKING_DATE": "2026-10-21"}, timeout=5)
 
+    def test_preconfirm_accepts_unpadded_buddhist_date(self):
+        self.args.date = date(2026, 1, 1)
+        self.args.book = True
+        self.confirmation["booking_header"]["booking_date"]["value"] = "1/1/2569"
+        self.booked["booking_data"]["BOOKING_DATE"] = "2026-01-01"
+        api = self.setup_api()
+        api.request.side_effect = [[self.slot], self.confirmation, self.booked, {"status": "create success"}]
+        self.assertEqual(self.run_with(api)["outcome"], "booked")
+
     def test_booking_and_review_complete_once(self):
         self.args.book = True
         api = self.setup_api()

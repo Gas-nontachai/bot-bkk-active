@@ -247,6 +247,9 @@ python3 open_booking_api.py \
 ```
 
 ตัวอย่างแรกเป็น preview และไม่ส่ง POST; `--book` ในตัวอย่างที่สองจึงส่งจองจริง
+โหมดจองจริงแสดงช่วงเวลาที่ค้นหา สรุปจำนวนช่องที่ API แจ้งเต็มและเวลาว่างของแต่ละสนาม
+โดยแสดงใหม่เมื่อสถานะเปลี่ยน พร้อมสรุปภาษาไทยเมื่อไม่พบช่องที่ผ่านเงื่อนไข
+`run.log` ไม่แสดง GET ตรวจเวลาที่สำเร็จซ้ำ ๆ; รายละเอียดคำขอเหล่านี้ยังอยู่ใน `api.jsonl`
 ทุกรอบเก็บ request/response ดิบอัตโนมัติใน `logger/<รอบ>/api.jsonl` ไม่ต้องเพิ่ม flag
 รวม URL/query, headers (รวม Authorization), payload, HTTP status, response body และ error
 ใช้ `flow_id` จับคู่ request/response ของคำขอที่ทำงานพร้อมกัน พร้อม timestamp และ duration

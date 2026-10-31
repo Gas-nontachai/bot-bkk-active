@@ -198,7 +198,8 @@ class BookingApi:
                 self.events.response(flow_id, response, data,
                                      round((time.perf_counter() - started) * 1000, 3))
                 response_logged = True
-            LOGGER.info("API %s %s: HTTP %d", method, path, response.status)
+            log = LOGGER.debug if method == "GET" and path.endswith("/slot") and response.status == 200 else LOGGER.info
+            log("API %s %s: HTTP %d", method, path, response.status)
             if response.status in (401, 403):
                 raise ApiHttpError("API ไม่อนุญาตให้เข้าถึง: session อาจหมดอายุ ให้จับ raw log ใหม่",
                                    response.status)
@@ -280,7 +281,7 @@ def find_center(api, name, *, metrics=None):
                 reason = "multiple_matches" if count and count > 1 else "invalid_response"
                 raise
             finally:
-                status("Center search attempt=%d http_status=%s matches=%s reason=%s elapsed=%.3fs",
+                LOGGER.info("Center search attempt=%d http_status=%s matches=%s reason=%s elapsed=%.3fs",
                        attempts, http_status, count, reason or "found", time.monotonic() - started)
             remaining = deadline - time.monotonic()
             if delay >= remaining:
@@ -290,8 +291,10 @@ def find_center(api, name, *, metrics=None):
             time.sleep(delay)
         raise RuntimeError(f"ค้นหาศูนย์ไม่สำเร็จภายใน 30 วินาที: {name}")
     finally:
-        status("Center search result=%s attempts=%d elapsed=%.3fs",
+        LOGGER.info("Center search result=%s attempts=%d elapsed=%.3fs",
                "success" if success else "failure", attempts, time.monotonic() - started)
+        status("%s: %s (ใช้เวลา %.1f วินาที)",
+               "พบศูนย์แล้ว" if success else "ค้นหาศูนย์ไม่สำเร็จ", name, time.monotonic() - started)
 
 
 def minute(value):
@@ -332,7 +335,7 @@ _PENDING_BOOKINGS = {}
 
 
 def _event(metrics, event, **fields):
-    status("API performance %s", json.dumps({
+    LOGGER.info("API performance %s", json.dumps({
         "event": event, "date": metrics["date"], "elapsed_ms": round((time.perf_counter() - metrics["started"]) * 1000, 3),
         **fields,
     }, ensure_ascii=False))
@@ -420,6 +423,7 @@ def run_api_booking(args):
     metrics = {"started": time.perf_counter(), "retries": [], "outcome": "error",
                "rate_lock": threading.Lock(), "retry_at": 0, "date": args.date.isoformat()}
     scheduled = getattr(args, "scheduled_at", None)
+    status("เริ่ม%sวันที่ %s", "จองสนามสำหรับ" if args.book else "ตรวจเวลาว่างสำหรับ", args.date)
     _event(metrics, "execution_started", scheduled_at=scheduled.isoformat() if scheduled else None)
     try:
         session = getattr(args, "prepared_session", None) or load_session(args.session)
@@ -435,12 +439,18 @@ def run_api_booking(args):
             if args.book and result["outcome"] in ("booked", "already_booked"):
                 _BOOKED_DATES.add(key)
             metrics["outcome"] = result["outcome"]
+            if result["outcome"] == "no_available_slot":
+                status("สรุปวันที่ %s: จองไม่ได้ — ไม่พบช่องว่างที่ผ่านเงื่อนไขในช่วงเวลาที่ต้องการ", args.date)
+            elif result["outcome"] == "already_booked":
+                status("สรุปวันที่ %s: มีรายการจองอยู่แล้ว จึงไม่ส่งจองเพิ่ม", args.date)
             return result
     except Exception as error:
+        status("รอบนี้เกิดข้อผิดพลาด (%s): %s", type(error).__name__, error)
         _event(metrics, "execution_error", error_class=type(error).__name__)
         raise
     finally:
         _event(metrics, "execution_finished", outcome=metrics["outcome"], retry_count=len(metrics["retries"]))
+        status("จบรอบ ใช้เวลา %.1f วินาที", time.perf_counter() - metrics["started"])
 
 
 def _availability(api, courts, day, metrics):
@@ -499,6 +509,7 @@ def _run_api_booking(args, session, metrics):
            courts=len(courts))
     if not courts:
         raise RuntimeError("API ไม่พบสนามแบดมินตัน")
+    status("พบสนามแบดมินตัน %d สนาม", len(courts))
     day = args.date.isoformat()
     for booking in _retry(metrics, api.bookings, booker):
         if booking.get("BOOKING_DATE") == day and booking.get("BOOKING_STATUS") != "CANCELLED":
@@ -517,6 +528,9 @@ def _race_booking(args, session, api, center, activity, courts, metrics):
     stop = threading.Event()
     deadline = time.monotonic() + getattr(args, "booking_search_seconds", 60)
     results, errors = [], []
+    status("ค้นหาวันที่ %s เวลา %02d:%02d–%02d:%02d จำนวน %d สนาม นานไม่เกิน %s วินาที",
+           args.date, *divmod(args.start_minute, 60), *divmod(args.end_minute, 60),
+           len(courts), getattr(args, "booking_search_seconds", 60))
     pending_base = str(args.session) + ".pending-booking.json"
     # Separate durable markers allow independent in-flight confirmations.
     for path in Path(args.session).parent.glob(Path(pending_base).name + ".*"):
@@ -533,6 +547,7 @@ def _race_booking(args, session, api, center, activity, courts, metrics):
         local.pending_path = Path(pending_base + "." + court["ID"])
         local.skip_review = True
         attempted = set()
+        previous_availability = None
         while not stop.is_set() and time.monotonic() < deadline:
             slots = _retry(metrics, api.request, "GET",
                            BASE + "/item/" + quote(court["ID"], safe="") + "/slot",
@@ -543,6 +558,16 @@ def _race_booking(args, session, api, center, activity, courts, metrics):
             for slot in sorted(slots, key=lambda item: item.get("START_TIME", "")):
                 if slot.get("ID") not in attempted and choose_slot([slot], args.start_minute, args.end_minute):
                     candidates.append((court, [slot], None))
+            matching = [slot for slot in slots if args.start_minute <= minute(slot["START_TIME"])
+                        < minute(slot["END_TIME"]) <= args.end_minute]
+            free = [slot for slot in slots if choose_slot([slot], 0, 24 * 60)]
+            availability = (len(matching), sum(slot.get("IS_FULL") is True for slot in matching),
+                            tuple((slot["START_TIME"][:5], slot["END_TIME"][:5]) for slot in free))
+            if availability != previous_availability:
+                status("%s: ช่วงที่ต้องการมี %d ช่อง API แจ้งเต็ม %d ช่อง | เวลาว่างทั้งหมด: %s",
+                       court["NAME"], availability[0], availability[1],
+                       ", ".join(start + "–" + end for start, end in availability[2]) or "ไม่มี")
+                previous_availability = availability
             for candidate in candidates:
                 if stop.is_set() or time.monotonic() >= deadline:
                     break
@@ -616,16 +641,19 @@ def _consume_availability(args, session, api, center, activity, availability, me
             last_error = error
             continue
         if isinstance(confirmation, dict) and confirmation.get("booking_status") == "FULL" and confirmation.get("is_available") is False:
-            status("Slot reserved by another user; trying next candidate")
+            status("%s %s: มีผู้จองตัดหน้าแล้ว กำลังลองช่องถัดไป", court["NAME"], interval)
             continue
         if not isinstance(confirmation, dict):
             raise RuntimeError("รูปแบบ preconfirm ไม่ถูกต้อง จึงไม่ส่งยืนยัน")
         try:
             header = confirmation.get("booking_header", {})
             price = header.get("price", {}).get("value")
+            booking_date = header.get("booking_date", {}).get("value")
+            date_parts = re.fullmatch(r"([0-9]{1,2})/([0-9]{1,2})/([0-9]{4})", booking_date) if isinstance(booking_date, str) else None
             checks = {
                 "availability": confirmation.get("is_available") is True,
-                "date": header.get("booking_date", {}).get("value") == args.date.strftime("%d/%m/") + str(args.date.year + 543),
+                "date": date_parts is not None and tuple(map(int, date_parts.groups())) == (
+                    args.date.day, args.date.month, args.date.year + 543),
                 "time": header.get("booking_time", {}).get("value") == slot["START_TIME"][:5] + " น.",
                 "court_title": confirmation.get("booking_detail", {}).get("booking_title", {}).get("value") == payload["BOOKING_TITLE"],
                 "free_price": getattr(args, "allow_paid", False) or price == "ไม่มี",
@@ -639,6 +667,9 @@ def _consume_availability(args, session, api, center, activity, availability, me
         except (AttributeError, TypeError):
             raise RuntimeError("รูปแบบ preconfirm ไม่ถูกต้อง จึงไม่ส่งยืนยัน") from None
         if failed:
+            if "date" in failed:
+                status("หยุดก่อนยืนยันจอง: วันที่ API ส่งกลับ %s ไม่ตรงกับวันที่ขอ %s",
+                       booking_date if date_parts else "รูปแบบไม่ถูกต้อง", args.date)
             status("Booking result=preconfirm_rejected checks=%s amount=%s payment_status=unknown",
                    ",".join(failed), booking_amount(price))
             if set(failed) <= {"availability", "free_price"}:

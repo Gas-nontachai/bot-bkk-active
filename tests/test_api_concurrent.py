@@ -140,6 +140,28 @@ class ConcurrentApiTests(unittest.TestCase):
         self.assertEqual(self.run_bot()["outcome"], "already_booked")
         self.api.request.assert_not_called()
 
+    def test_full_slots_log_thai_summary_and_outside_window_availability(self):
+        full = {**self.fixture.slot, "IS_FULL": True, "REMAINING": 0}
+        early = {**self.fixture.slot, "ID": "early", "START_TIME": "05:00:00", "END_TIME": "06:00:00"}
+        self.api.request.return_value = [full, early]
+        with self.assertLogs("bkk-active", level="INFO") as logs:
+            self.assertEqual(self.run_bot()["outcome"], "no_available_slot")
+        output = "\n".join(logs.output)
+        self.assertIn("API แจ้งเต็ม 1 ช่อง", output)
+        self.assertIn("เวลาว่างทั้งหมด: 05:00–06:00", output)
+        self.assertIn("จองไม่ได้ — ไม่พบช่องว่างที่ผ่านเงื่อนไข", output)
+        self.assertEqual(output.count("API แจ้งเต็ม"), len(self.courts))
+        from bkk_active.logging_setup import StatusFilter
+        terminal = "\n".join(record.getMessage() for record in logs.records if StatusFilter().filter(record))
+        self.assertIn("เริ่มจองสนามสำหรับวันที่", terminal)
+        self.assertIn("พบศูนย์แล้ว", terminal)
+        self.assertIn("พบสนามแบดมินตัน 3 สนาม", terminal)
+        self.assertIn("จบรอบ ใช้เวลา", terminal)
+        self.assertNotIn("API performance", terminal)
+        self.assertNotIn("Center search", terminal)
+        self.assertIn("API performance", output)
+        self.assertFalse(self.posts)
+
     def test_no_availability_and_preview_never_post(self):
         for preview, slots, expected in ((False, [], "no_available_slot"),
                                          (True, [self.fixture.slot], "available")):

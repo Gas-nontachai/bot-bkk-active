@@ -4,6 +4,9 @@
 ต้องล็อกอินในแอป จับ raw API log แล้วสร้าง `session.json` ใหม่
 ตอนรันบอตผ่าน API ใช้เพียงไฟล์ session ไม่ต้องเปิด device ค้างไว้
 
+หากยังไม่มี device หรือ emulator ที่พร้อมใช้งาน ให้เริ่มที่
+[คู่มือตั้งค่า emulator และติดตั้ง BKK Active จากศูนย์](setup-rooted-emulator.md)
+
 ## ต้องใช้เครื่อง root ไหม
 
 ใช้ emulator ตัวเดิมที่ตั้งค่าให้แอปเชื่อถือ CA ของ mitmproxy แล้วจะสะดวกที่สุด

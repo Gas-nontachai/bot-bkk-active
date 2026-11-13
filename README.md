@@ -1,5 +1,7 @@
 # BKK Active automation
 
+เริ่มใช้งานด้วย [คู่มือ BKK Active API CLI](docs/start-api-bot.md) — คำสั่งตั้งเวลา 07:00 และจองทันที
+
 ## โครงสร้างโปรเจกต์
 
 ```text
